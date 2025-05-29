@@ -191,10 +191,13 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
             
             self.preRecordingDelayTimer?.invalidate()
             self.preRecordingDelayTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timerRef in
-                Task { @MainActor [weak self] in // Added [weak self] to inner Task
-                    guard let strongSelf = self else { timerRef.invalidate(); return } // Ensure self is valid for Task
+                guard let strongSelf = self else { timerRef.invalidate(); return }
+                // Task wrapper is kept as it seems to manage countdown state updates before calling beginActualRecording.
+                // beginActualRecording is @MainActor, other property accesses are on strongSelf.
+                Task { @MainActor in // No need to recapture self, uses strongSelf from timer closure.
                     guard strongSelf.measurementState == .preRecordingCountdown else {
-                        timerRef.invalidate(); return
+                        timerRef.invalidate(); // Ensure timer stops if state is no longer preRecordingCountdown
+                        return
                     }
                     if let delayStartTime = strongSelf.preRecordingPhaseStartTime {
                         let elapsedDelay = Date().timeIntervalSince(delayStartTime)
@@ -203,15 +206,14 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
                             timerRef.invalidate(); strongSelf.preRecordingDelayTimer = nil
                             strongSelf.beginActualRecording()
                         }
-                    } else {
+                    } else { // This case implies preRecordingPhaseStartTime was nil
                         timerRef.invalidate(); strongSelf.preRecordingDelayTimer = nil
-                        // If preRecordingPhaseStartTime was nil, something went wrong, reset to idle.
                         strongSelf.measurementState = .idle 
                     }
                 }
             }
         } else {
-            self.beginActualRecording() // This is a direct call, should be fine
+            self.beginActualRecording()
         }
     }
 
@@ -238,27 +240,39 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
 
         let fetchInterval = 1.0 / Double(max(100, self.actualCoreMotionRequestRate))
         self.dataFetchTimer?.invalidate()
-        self.dataFetchTimer = Timer.scheduledTimer(withTimeInterval:max(0.005,fetchInterval/2.0),repeats:true){ [weak self] _ in
-            Task { @MainActor in
-                guard let strongSelf = self else { return }
+        // captureNewSamples is @MainActor, so the Task wrapper is redundant if the timer fires on main.
+        // However, to be safe and explicit, especially if timer's thread isn't guaranteed or for clarity:
+        self.dataFetchTimer = Timer.scheduledTimer(withTimeInterval:max(0.005,fetchInterval/2.0),repeats:true){ [weak self] timerRef in
+            guard let strongSelf = self else { timerRef.invalidate(); return }
+            Task { @MainActor in // Explicitly ensuring MainActor context for safety
                 strongSelf.captureNewSamples()
             }
         }
         
         self.durationCountdownTimer?.invalidate()
         let timerInterval = 0.05
-        self.durationCountdownTimer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { [weak self] tR in
-            Task { @MainActor in
-                guard let strongSelf = self, strongSelf.isRecording else { tR.invalidate(); return }
+        self.durationCountdownTimer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { [weak self] timerRef in
+            guard let strongSelf = self else { timerRef.invalidate(); return }
+            // Task wrapper is kept as there are multiple state updates and method calls.
+            Task { @MainActor in // Explicitly ensuring MainActor context
+                guard strongSelf.isRecording else { timerRef.invalidate(); return } // Check isRecording status inside task
+                
                 if let rST = strongSelf.recordingActualStartTime { strongSelf.elapsedTime = Date().timeIntervalSince(rST) } else { strongSelf.elapsedTime += timerInterval }
                 if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 { strongSelf.timeLeft = max(0, strongSelf.measurementDurationSetting - strongSelf.elapsedTime) }
+                
                 if strongSelf.measurementState == .recording {
                     let cmt = strongSelf.timeSeriesData[Axis.x]?.last?.timestamp ?? strongSelf.elapsedTime
                     if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 {
                         strongSelf.axisRanges.minX = 0; strongSelf.axisRanges.maxX = max(strongSelf.measurementDurationSetting, cmt + 0.2)
-                    } else { let windowDur = 10.0; strongSelf.axisRanges.minX = max(0, strongSelf.elapsedTime - windowDur); strongSelf.axisRanges.maxX = strongSelf.elapsedTime + 0.2 }
+                    } else { 
+                        let windowDur = 10.0
+                        strongSelf.axisRanges.minX = max(0, strongSelf.elapsedTime - windowDur)
+                        strongSelf.axisRanges.maxX = strongSelf.elapsedTime + 0.2 
+                    }
                 }
-                if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 && strongSelf.elapsedTime >= strongSelf.measurementDurationSetting { strongSelf.stopMeasurement() }
+                if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 && strongSelf.elapsedTime >= strongSelf.measurementDurationSetting {
+                    strongSelf.stopMeasurement()
+                }
             }
         }}
     }
@@ -267,68 +281,74 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     func stopMeasurement() {
         let wasPreRecording = (self.measurementState == .preRecordingCountdown)
         
-        self.preRecordingDelayTimer?.invalidate(); self.preRecordingDelayTimer=nil
-        self.durationCountdownTimer?.invalidate(); self.durationCountdownTimer=nil
-        self.dataFetchTimer?.invalidate(); self.dataFetchTimer=nil
+        self.preRecordingDelayTimer?.invalidate(); self.preRecordingDelayTimer = nil
+        self.durationCountdownTimer?.invalidate(); self.durationCountdownTimer = nil
+        self.dataFetchTimer?.invalidate(); self.dataFetchTimer = nil
         
-        if self.isRecording{
+        if self.isRecording {
             self.recorder.stopRecording()
-            Task{ @MainActor [weak self] in // Added [weak self]
+            // captureNewSamples is @MainActor.
+            Task { @MainActor [weak self] in
                 guard let strongSelf = self else { return }
                 strongSelf.captureNewSamples()
             }
         }
-        self.isRecording=false
+        self.isRecording = false
         self.measurementState = wasPreRecording ? .idle : .completed
         
-        if !wasPreRecording{
-            if let sT=self.recordingActualStartTime{self.elapsedTime = Date().timeIntervalSince(sT)}
-            if self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 {self.timeLeft = max(0,self.measurementDurationSetting-self.elapsedTime)} else {self.timeLeft=0}
-            let fMT = Axis.allCases.compactMap{ ax in self.timeSeriesData[ax]?.last?.timestamp }.max() ?? self.elapsedTime
+        // Methods called directly on self (now strongSelf if in a closure context)
+        // or properties of self are generally fine if self is guaranteed to be valid.
+        // The @MainActor annotation on the function itself helps, but closures inside need care.
+        if !wasPreRecording {
+            if let sT = self.recordingActualStartTime { self.elapsedTime = Date().timeIntervalSince(sT) }
+            if self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 { self.timeLeft = max(0, self.measurementDurationSetting - self.elapsedTime) } else { self.timeLeft = 0 }
+            let fMT = Axis.allCases.compactMap { axKey in self.timeSeriesData[axKey]?.last?.timestamp }.max() ?? self.elapsedTime
             self.axisRanges.minX = 0
-            self.axisRanges.maxX = max(fMT,self.currentEffectiveMaxGraphDuration)
+            self.axisRanges.maxX = max(fMT, self.currentEffectiveMaxGraphDuration)
             if self.collectedSamplesCount > 0 {
-                self.rmsX = self.calculateOverallRMS(for:.x)
-                self.rmsY = self.calculateOverallRMS(for:.y)
-                self.rmsZ = self.calculateOverallRMS(for:.z)
+                self.rmsX = self.calculateOverallRMS(for: .x)
+                self.rmsY = self.calculateOverallRMS(for: .y)
+                self.rmsZ = self.calculateOverallRMS(for: .z)
             } else {
                 self.resetRMSValuesAndAttitude()
             }
             self.calculateActualAverageRate()
-            if self.collectedSamplesCount > 0 { self.computeFFT() } else { self.isFFTReady=false; self.calculatedActualAverageSamplingRateForFFT=nil }
+            if self.collectedSamplesCount > 0 { self.computeFFT() } else { self.isFFTReady = false; self.calculatedActualAverageSamplingRateForFFT = nil }
         } else {
             self.updateIdleStateDisplayValues()
         }
-        self.recordingActualStartTime=nil
-        self.preRecordingPhaseStartTime=nil
+        self.recordingActualStartTime = nil
+        self.preRecordingPhaseStartTime = nil
         if self.useLinearAccelerationSetting {
-            self.startLiveAttitudeMonitoring() // This should be fine as it's a direct call
+            self.startLiveAttitudeMonitoring()
         }
     }
 
     @MainActor
     func resetMeasurement() {
-        if self.isRecording || self.measurementState == .preRecordingCountdown { self.stopMeasurement() }; // Direct call, should be fine
-        self.resetDataForNewRecording() // Direct call, should be fine
-        self.measurementState = .idle; self.isFFTReady=false; self.elapsedTime=0
-        self.updateIdleStateDisplayValues() // Direct call, should be fine
-        self.latestX=0; self.latestY=0; self.latestZ=0; self.calculatedActualAverageSamplingRateForFFT=nil; self.currentRoll=0; self.currentPitch=0
-        self.recordingActualStartTime=nil; self.preRecordingPhaseStartTime=nil
-        if self.useLinearAccelerationSetting { self.startLiveAttitudeMonitoring() } // Direct call, should be fine
-        else { self.stopLiveAttitudeMonitoring() } // Direct call, should be fine
+        if self.isRecording || self.measurementState == .preRecordingCountdown { self.stopMeasurement() }
+        self.resetDataForNewRecording()
+        self.measurementState = .idle; self.isFFTReady = false; self.elapsedTime = 0
+        self.updateIdleStateDisplayValues()
+        self.latestX = 0; self.latestY = 0; self.latestZ = 0; self.calculatedActualAverageSamplingRateForFFT = nil; self.currentRoll = 0; self.currentPitch = 0
+        self.recordingActualStartTime = nil; self.preRecordingPhaseStartTime = nil
+        if self.useLinearAccelerationSetting { self.startLiveAttitudeMonitoring() }
+        else { self.stopLiveAttitudeMonitoring() }
     }
 
     @MainActor
     func resetDataForNewRecording() {
-        Axis.allCases.forEach{ a in self.timeSeriesData[a]?.removeAll(); self.fftMagnitudes[a]?.removeAll() }
-        self.fftFrequencies.removeAll(); self.lastProcessedSampleTimestamp=0
-        self.resetRMSValuesAndAttitude() // Direct call, should be fine
+        Axis.allCases.forEach { aKey in self.timeSeriesData[aKey]?.removeAll(); self.fftMagnitudes[aKey]?.removeAll() }
+        self.fftFrequencies.removeAll(); self.lastProcessedSampleTimestamp = 0
+        self.resetRMSValuesAndAttitude()
     }
     
+    // captureNewSamples is @MainActor. Direct use of self is fine here.
+    // No internal closures that would lose self context.
     @MainActor
     func captureNewSamples() {
         guard self.measurementState == .recording || (self.measurementState == .completed && self.dataFetchTimer == nil && !self.isRecording) else { return }
-        let aRD = self.recorder.getRecordedData(); let nS = aRD.filter{ $0.timestamp > self.lastProcessedSampleTimestamp }; guard !nS.isEmpty else { return }
+        let aRD = self.recorder.getRecordedData(); let nS = aRD.filter { $0.timestamp > self.lastProcessedSampleTimestamp }; guard !nS.isEmpty else { return }
         var cMAY = abs(self.axisRanges.maxY)
         for s in nS {
             self.timeSeriesData[Axis.x]?.append(.init(timestamp:s.timestamp,value:s.x))
@@ -342,7 +362,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         }
         
         if self.measurementState == .recording {
-            let newDynamicMaxY = (cMAY.isFinite && cMAY > 0.00001) ? cMAY : 1.0 // Use a small epsilon for zero-check
+            let newDynamicMaxY = (cMAY.isFinite && cMAY > 0.00001) ? cMAY : 1.0
             self.axisRanges.minY = -newDynamicMaxY
             self.axisRanges.maxY = newDynamicMaxY
         }
@@ -350,7 +370,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     
     private func calculateOverallRMS(for axis: Axis) -> Double {
         guard let dPs = self.timeSeriesData[axis], !dPs.isEmpty else { return 0.0 }
-        let v = dPs.map{ $0.value }; let sOS = v.reduce(0.0){ $0 + ($1*$1) }; return sqrt(sOS/Double(v.count))
+        let v = dPs.map { $0.value }; let sOS = v.reduce(0.0) { $0 + ($1*$1) }; return sqrt(sOS/Double(v.count))
     }
     
     private func calculateActualAverageRate() {
@@ -358,28 +378,29 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
               let firstTimestamp = xDataPoints.first?.timestamp,
               let lastTimestamp = xDataPoints.last?.timestamp,
               lastTimestamp > firstTimestamp else {
-            self.calculatedActualAverageSamplingRateForFFT = Double(self.actualCoreMotionRequestRate) // Direct access, should be fine
+            self.calculatedActualAverageSamplingRateForFFT = Double(self.actualCoreMotionRequestRate)
             return
         }
         let numberOfActualSamples = Double(xDataPoints.count)
         let actualRecordingDuration = lastTimestamp - firstTimestamp
         let rate = (numberOfActualSamples - 1.0) / actualRecordingDuration
-        self.calculatedActualAverageSamplingRateForFFT = (rate > 0 && rate.isFinite) ? rate : Double(self.actualCoreMotionRequestRate) // Direct access, should be fine
+        self.calculatedActualAverageSamplingRateForFFT = (rate > 0 && rate.isFinite) ? rate : Double(self.actualCoreMotionRequestRate)
     }
     
     @MainActor
     func computeFFT() {
         guard self.collectedSamplesCount > 0, let rateForFFT = self.calculatedActualAverageSamplingRateForFFT else { self.isFFTReady = false; return }
         self.isFFTReady = false
-        let xV = (self.timeSeriesData[Axis.x] ?? []).map{ $0.value }
-        let yV = (self.timeSeriesData[Axis.y] ?? []).map{ $0.value }
-        let zV = (self.timeSeriesData[Axis.z] ?? []).map{ $0.value }
-        let analyzer = self.fftAnalyzer // Local copy, fine
-        Task.detached(priority: .userInitiated) { [weak self, analyzer] in // analyzer is captured
+        let xV = (self.timeSeriesData[Axis.x] ?? []).map { $0.value }
+        let yV = (self.timeSeriesData[Axis.y] ?? []).map { $0.value }
+        let zV = (self.timeSeriesData[Axis.z] ?? []).map { $0.value }
+        let analyzer = self.fftAnalyzer 
+        Task.detached(priority: .userInitiated) { [weak self, analyzer] in
             guard let strongSelf = self else { return }
             let rX = analyzer.performFFT(input:xV, samplingRate:rateForFFT)
             let rY = analyzer.performFFT(input:yV, samplingRate:rateForFFT)
             let rZ = analyzer.performFFT(input:zV, samplingRate:rateForFFT)
+            // This await MainActor.run block will use the strongSelf captured by Task.detached
             await MainActor.run {
                 strongSelf.fftFrequencies = rX.frequencies
                 strongSelf.fftMagnitudes[Axis.x] = rX.magnitude
@@ -411,13 +432,14 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         numberFormatter.decimalSeparator = "."
         numberFormatter.numberStyle = .decimal
 
+        // Ensure explicit type annotation for DataPoint arrays
         let xSamples: [DataPoint] = self.timeSeriesData[Axis.x] ?? []
         let ySamples: [DataPoint] = self.timeSeriesData[Axis.y] ?? []
         let zSamples: [DataPoint] = self.timeSeriesData[Axis.z] ?? []
         let rowCount = [xSamples.count, ySamples.count, zSamples.count].min() ?? 0
         
         for i in 0..<rowCount {
-            // Already guarded by rowCount, but direct access is fine.
+            // Accessing .timestamp and .value should now be safe with explicit typing above.
             let ts = xSamples[i].timestamp
             let xVal = xSamples[i].value
             let yVal = ySamples[i].value
