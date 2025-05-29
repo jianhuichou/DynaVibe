@@ -134,7 +134,10 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     // MARK: - Helper Methods
     private func resetRMSValuesAndAttitude() {
         self.rmsX = 0.0; self.rmsY = 0.0; self.rmsZ = 0.0
-        Task { @MainActor in self.currentRoll = 0.0; self.currentPitch = 0.0 }
+        Task { @MainActor [weak self] in // Added [weak self]
+            guard let strongSelf = self else { return }
+            strongSelf.currentRoll = 0.0; strongSelf.currentPitch = 0.0
+        }
     }
 
     private func findPeakFrequency(for axis: Axis) -> Double? {
@@ -154,9 +157,10 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         self.motionSessionForLiveAttitude.provideUserAccelerationFromDeviceMotion = true
         _ = self.motionSessionForLiveAttitude.startDeviceMotionUpdates(for: self, interval: self.liveAttitudeUpdateInterval) { [weak self] (payload, error) in
             guard let strongSelf = self, strongSelf.isLiveAttitudeMonitoringActive, let dataPayload = payload, error == nil else { return }
-            Task { @MainActor in
-                strongSelf.currentRoll = dataPayload.attitude.roll * 180.0 / .pi
-                strongSelf.currentPitch = dataPayload.attitude.pitch * 180.0 / .pi
+            Task { @MainActor [weak strongSelf] in // Nested Task, capture strongSelf weakly
+                guard let sSelf = strongSelf else { return }
+                sSelf.currentRoll = dataPayload.attitude.roll * 180.0 / .pi
+                sSelf.currentPitch = dataPayload.attitude.pitch * 180.0 / .pi
             }
         }
     }
@@ -165,9 +169,10 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         guard self.isLiveAttitudeMonitoringActive else { return }
         self.isLiveAttitudeMonitoringActive = false
         self.motionSessionForLiveAttitude.stopDeviceMotionUpdates(for: self)
-        Task { @MainActor in
-            self.currentRoll = 0.0
-            self.currentPitch = 0.0
+        Task { @MainActor [weak self] in // Added [weak self]
+            guard let strongSelf = self else { return }
+            strongSelf.currentRoll = 0.0
+            strongSelf.currentPitch = 0.0
         }
     }
 
@@ -175,7 +180,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     @MainActor
     func startMeasurement() {
         guard self.measurementState == .idle else { return }
-        self.resetDataForNewRecording()
+        self.resetDataForNewRecording() // This line should be fine as it's directly in the method body
         
         if self.recordingStartDelaySetting > 0 {
             self.measurementState = .preRecordingCountdown
@@ -186,8 +191,9 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
             
             self.preRecordingDelayTimer?.invalidate()
             self.preRecordingDelayTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timerRef in
-                Task { @MainActor in
-                    guard let strongSelf = self, strongSelf.measurementState == .preRecordingCountdown else {
+                Task { @MainActor [weak self] in // Added [weak self] to inner Task
+                    guard let strongSelf = self else { timerRef.invalidate(); return } // Ensure self is valid for Task
+                    guard strongSelf.measurementState == .preRecordingCountdown else {
                         timerRef.invalidate(); return
                     }
                     if let delayStartTime = strongSelf.preRecordingPhaseStartTime {
@@ -199,12 +205,13 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
                         }
                     } else {
                         timerRef.invalidate(); strongSelf.preRecordingDelayTimer = nil
-                        strongSelf.measurementState = .idle
+                        // If preRecordingPhaseStartTime was nil, something went wrong, reset to idle.
+                        strongSelf.measurementState = .idle 
                     }
                 }
             }
         } else {
-            self.beginActualRecording()
+            self.beginActualRecording() // This is a direct call, should be fine
         }
     }
 
@@ -232,23 +239,26 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         let fetchInterval = 1.0 / Double(max(100, self.actualCoreMotionRequestRate))
         self.dataFetchTimer?.invalidate()
         self.dataFetchTimer = Timer.scheduledTimer(withTimeInterval:max(0.005,fetchInterval/2.0),repeats:true){ [weak self] _ in
-            Task { @MainActor in self?.captureNewSamples() }
+            Task { @MainActor in
+                guard let strongSelf = self else { return }
+                strongSelf.captureNewSamples()
+            }
         }
         
         self.durationCountdownTimer?.invalidate()
         let timerInterval = 0.05
         self.durationCountdownTimer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { [weak self] tR in
             Task { @MainActor in
-                guard let s = self,s.isRecording else{tR.invalidate();return}
-                if let rST=s.recordingActualStartTime{s.elapsedTime=Date().timeIntervalSince(rST)}else{s.elapsedTime+=timerInterval}
-                if s.autoStopRecordingEnabled && s.measurementDurationSetting > 0 { s.timeLeft=max(0,s.measurementDurationSetting-s.elapsedTime) }
-                if s.measurementState == .recording{
-                    let cmt=s.timeSeriesData[Axis.x]?.last?.timestamp ?? s.elapsedTime
-                    if s.autoStopRecordingEnabled && s.measurementDurationSetting > 0 {
-                        s.axisRanges.minX = 0; s.axisRanges.maxX = max(s.measurementDurationSetting, cmt + 0.2)
-                    } else { let windowDur = 10.0; s.axisRanges.minX = max(0, s.elapsedTime - windowDur); s.axisRanges.maxX = s.elapsedTime + 0.2 }
+                guard let strongSelf = self, strongSelf.isRecording else { tR.invalidate(); return }
+                if let rST = strongSelf.recordingActualStartTime { strongSelf.elapsedTime = Date().timeIntervalSince(rST) } else { strongSelf.elapsedTime += timerInterval }
+                if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 { strongSelf.timeLeft = max(0, strongSelf.measurementDurationSetting - strongSelf.elapsedTime) }
+                if strongSelf.measurementState == .recording {
+                    let cmt = strongSelf.timeSeriesData[Axis.x]?.last?.timestamp ?? strongSelf.elapsedTime
+                    if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 {
+                        strongSelf.axisRanges.minX = 0; strongSelf.axisRanges.maxX = max(strongSelf.measurementDurationSetting, cmt + 0.2)
+                    } else { let windowDur = 10.0; strongSelf.axisRanges.minX = max(0, strongSelf.elapsedTime - windowDur); strongSelf.axisRanges.maxX = strongSelf.elapsedTime + 0.2 }
                 }
-                if s.autoStopRecordingEnabled && s.measurementDurationSetting > 0 && s.elapsedTime >= s.measurementDurationSetting { s.stopMeasurement() }
+                if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 && strongSelf.elapsedTime >= strongSelf.measurementDurationSetting { strongSelf.stopMeasurement() }
             }
         }}
     }
@@ -263,59 +273,68 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         
         if self.isRecording{
             self.recorder.stopRecording()
-            Task{@MainActor in self.captureNewSamples()}
+            Task{ @MainActor [weak self] in // Added [weak self]
+                guard let strongSelf = self else { return }
+                strongSelf.captureNewSamples()
+            }
         }
         self.isRecording=false
         self.measurementState = wasPreRecording ? .idle : .completed
         
         if !wasPreRecording{
-            if let sT=self.recordingActualStartTime{self.elapsedTime=Date().timeIntervalSince(sT)}
-            if self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 {self.timeLeft=max(0,self.measurementDurationSetting-self.elapsedTime)} else {self.timeLeft=0}
-            let fMT=Axis.allCases.compactMap{self.timeSeriesData[$0]?.last?.timestamp}.max() ?? self.elapsedTime
+            if let sT=self.recordingActualStartTime{self.elapsedTime = Date().timeIntervalSince(sT)}
+            if self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 {self.timeLeft = max(0,self.measurementDurationSetting-self.elapsedTime)} else {self.timeLeft=0}
+            let fMT = Axis.allCases.compactMap{ ax in self.timeSeriesData[ax]?.last?.timestamp }.max() ?? self.elapsedTime
             self.axisRanges.minX = 0
-            self.axisRanges.maxX=max(fMT,self.currentEffectiveMaxGraphDuration)
-            if self.collectedSamplesCount>0{self.rmsX=self.calculateOverallRMS(for:.x);self.rmsY=self.calculateOverallRMS(for:.y);self.rmsZ=self.calculateOverallRMS(for:.z)}else{self.resetRMSValuesAndAttitude()}
+            self.axisRanges.maxX = max(fMT,self.currentEffectiveMaxGraphDuration)
+            if self.collectedSamplesCount > 0 {
+                self.rmsX = self.calculateOverallRMS(for:.x)
+                self.rmsY = self.calculateOverallRMS(for:.y)
+                self.rmsZ = self.calculateOverallRMS(for:.z)
+            } else {
+                self.resetRMSValuesAndAttitude()
+            }
             self.calculateActualAverageRate()
-            if self.collectedSamplesCount>0{self.computeFFT()}else{self.isFFTReady=false;self.calculatedActualAverageSamplingRateForFFT=nil}
-        } else{
+            if self.collectedSamplesCount > 0 { self.computeFFT() } else { self.isFFTReady=false; self.calculatedActualAverageSamplingRateForFFT=nil }
+        } else {
             self.updateIdleStateDisplayValues()
         }
         self.recordingActualStartTime=nil
         self.preRecordingPhaseStartTime=nil
         if self.useLinearAccelerationSetting {
-            self.startLiveAttitudeMonitoring()
+            self.startLiveAttitudeMonitoring() // This should be fine as it's a direct call
         }
     }
 
     @MainActor
     func resetMeasurement() {
-        if self.isRecording||self.measurementState == .preRecordingCountdown{self.stopMeasurement()};
-        self.resetDataForNewRecording()
+        if self.isRecording || self.measurementState == .preRecordingCountdown { self.stopMeasurement() }; // Direct call, should be fine
+        self.resetDataForNewRecording() // Direct call, should be fine
         self.measurementState = .idle; self.isFFTReady=false; self.elapsedTime=0
-        self.updateIdleStateDisplayValues()
+        self.updateIdleStateDisplayValues() // Direct call, should be fine
         self.latestX=0; self.latestY=0; self.latestZ=0; self.calculatedActualAverageSamplingRateForFFT=nil; self.currentRoll=0; self.currentPitch=0
         self.recordingActualStartTime=nil; self.preRecordingPhaseStartTime=nil
-        if self.useLinearAccelerationSetting { self.startLiveAttitudeMonitoring() }
-        else { self.stopLiveAttitudeMonitoring() }
+        if self.useLinearAccelerationSetting { self.startLiveAttitudeMonitoring() } // Direct call, should be fine
+        else { self.stopLiveAttitudeMonitoring() } // Direct call, should be fine
     }
 
     @MainActor
     func resetDataForNewRecording() {
-        Axis.allCases.forEach{a in self.timeSeriesData[a]?.removeAll(); self.fftMagnitudes[a]?.removeAll()}
+        Axis.allCases.forEach{ a in self.timeSeriesData[a]?.removeAll(); self.fftMagnitudes[a]?.removeAll() }
         self.fftFrequencies.removeAll(); self.lastProcessedSampleTimestamp=0
-        self.resetRMSValuesAndAttitude()
+        self.resetRMSValuesAndAttitude() // Direct call, should be fine
     }
     
     @MainActor
     func captureNewSamples() {
-        guard self.measurementState == .recording || (self.measurementState == .completed && self.dataFetchTimer == nil && !self.isRecording) else {return}
-        let aRD=self.recorder.getRecordedData(); let nS=aRD.filter{$0.timestamp > self.lastProcessedSampleTimestamp}; guard !nS.isEmpty else {return}
-        var cMAY=abs(self.axisRanges.maxY)
-        for s in nS{
+        guard self.measurementState == .recording || (self.measurementState == .completed && self.dataFetchTimer == nil && !self.isRecording) else { return }
+        let aRD = self.recorder.getRecordedData(); let nS = aRD.filter{ $0.timestamp > self.lastProcessedSampleTimestamp }; guard !nS.isEmpty else { return }
+        var cMAY = abs(self.axisRanges.maxY)
+        for s in nS {
             self.timeSeriesData[Axis.x]?.append(.init(timestamp:s.timestamp,value:s.x))
             self.timeSeriesData[Axis.y]?.append(.init(timestamp:s.timestamp,value:s.y))
             self.timeSeriesData[Axis.z]?.append(.init(timestamp:s.timestamp,value:s.z))
-            cMAY=max(cMAY,abs(s.x),abs(s.y),abs(s.z))
+            cMAY = max(cMAY,abs(s.x),abs(s.y),abs(s.z))
             self.latestX=s.x; self.latestY=s.y; self.latestZ=s.z
         }
         if let lastTimestamp = nS.last?.timestamp {
@@ -330,8 +349,8 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     }
     
     private func calculateOverallRMS(for axis: Axis) -> Double {
-        guard let dPs=self.timeSeriesData[axis],!dPs.isEmpty else{return 0.0}
-        let v=dPs.map{$0.value};let sOS=v.reduce(0.0){$0+($1*$1)};return sqrt(sOS/Double(v.count))
+        guard let dPs = self.timeSeriesData[axis], !dPs.isEmpty else { return 0.0 }
+        let v = dPs.map{ $0.value }; let sOS = v.reduce(0.0){ $0 + ($1*$1) }; return sqrt(sOS/Double(v.count))
     }
     
     private func calculateActualAverageRate() {
@@ -339,33 +358,33 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
               let firstTimestamp = xDataPoints.first?.timestamp,
               let lastTimestamp = xDataPoints.last?.timestamp,
               lastTimestamp > firstTimestamp else {
-            self.calculatedActualAverageSamplingRateForFFT = Double(self.actualCoreMotionRequestRate)
+            self.calculatedActualAverageSamplingRateForFFT = Double(self.actualCoreMotionRequestRate) // Direct access, should be fine
             return
         }
         let numberOfActualSamples = Double(xDataPoints.count)
         let actualRecordingDuration = lastTimestamp - firstTimestamp
         let rate = (numberOfActualSamples - 1.0) / actualRecordingDuration
-        self.calculatedActualAverageSamplingRateForFFT = (rate > 0 && rate.isFinite) ? rate : Double(self.actualCoreMotionRequestRate)
+        self.calculatedActualAverageSamplingRateForFFT = (rate > 0 && rate.isFinite) ? rate : Double(self.actualCoreMotionRequestRate) // Direct access, should be fine
     }
     
     @MainActor
     func computeFFT() {
-        guard self.collectedSamplesCount > 0, let rateForFFT = self.calculatedActualAverageSamplingRateForFFT else {self.isFFTReady = false; return}
+        guard self.collectedSamplesCount > 0, let rateForFFT = self.calculatedActualAverageSamplingRateForFFT else { self.isFFTReady = false; return }
         self.isFFTReady = false
-        let xV = (self.timeSeriesData[Axis.x] ?? []).map{$0.value}
-        let yV = (self.timeSeriesData[Axis.y] ?? []).map{$0.value}
-        let zV = (self.timeSeriesData[Axis.z] ?? []).map{$0.value}
-        let analyzer = self.fftAnalyzer
-        Task.detached(priority: .userInitiated) { [weak self, analyzer] in
+        let xV = (self.timeSeriesData[Axis.x] ?? []).map{ $0.value }
+        let yV = (self.timeSeriesData[Axis.y] ?? []).map{ $0.value }
+        let zV = (self.timeSeriesData[Axis.z] ?? []).map{ $0.value }
+        let analyzer = self.fftAnalyzer // Local copy, fine
+        Task.detached(priority: .userInitiated) { [weak self, analyzer] in // analyzer is captured
             guard let strongSelf = self else { return }
             let rX = analyzer.performFFT(input:xV, samplingRate:rateForFFT)
             let rY = analyzer.performFFT(input:yV, samplingRate:rateForFFT)
             let rZ = analyzer.performFFT(input:zV, samplingRate:rateForFFT)
             await MainActor.run {
-                strongSelf.fftFrequencies=rX.frequencies
-                strongSelf.fftMagnitudes[Axis.x]=rX.magnitude
-                strongSelf.fftMagnitudes[Axis.y]=rY.magnitude
-                strongSelf.fftMagnitudes[Axis.z]=rZ.magnitude
+                strongSelf.fftFrequencies = rX.frequencies
+                strongSelf.fftMagnitudes[Axis.x] = rX.magnitude
+                strongSelf.fftMagnitudes[Axis.y] = rY.magnitude
+                strongSelf.fftMagnitudes[Axis.z] = rZ.magnitude
                 strongSelf.isFFTReady = true
             }
         }
@@ -392,9 +411,9 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         numberFormatter.decimalSeparator = "."
         numberFormatter.numberStyle = .decimal
 
-        let xSamples = self.timeSeriesData[Axis.x] ?? []
-        let ySamples = self.timeSeriesData[Axis.y] ?? []
-        let zSamples = self.timeSeriesData[Axis.z] ?? []
+        let xSamples: [DataPoint] = self.timeSeriesData[Axis.x] ?? []
+        let ySamples: [DataPoint] = self.timeSeriesData[Axis.y] ?? []
+        let zSamples: [DataPoint] = self.timeSeriesData[Axis.z] ?? []
         let rowCount = [xSamples.count, ySamples.count, zSamples.count].min() ?? 0
         
         for i in 0..<rowCount {
