@@ -29,7 +29,7 @@ struct ContentView: View {
                 }
                 .tag(3)
         }
-        .onChange(of: selectedTab) { newValue in
+        .onChange(of: selectedTab) { oldValue, newValue in
             if newValue == 0 {
                 print("Switched to Real-Time Data")
             } else if newValue == 1 {
@@ -37,6 +37,8 @@ struct ContentView: View {
             } else if newValue == 2 {
                 print("Switched to Settings")
             }
+            // Note: oldValue is available but not used in this specific logic.
+            // If a case for tag 3 (HelpView) was intended, it would be added here.
         }
     }
 }

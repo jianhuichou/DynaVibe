@@ -1,176 +1,219 @@
-// UI/RealTimeDataView.swift
+// DynaVibe/UI/RealTimeDataView.swift
 import SwiftUI
 
 struct RealTimeDataView: View {
-    @StateObject private var vm = AccelerationViewModel()
-    private enum DisplayMode: Hashable { case time, frequency }
-    @State private var currentDisplayMode: DisplayMode = .time
-    private let axisColors: [Axis: Color] = [.x: .red, .y: .green, .z: .blue]
-
-    private var graphPlotData: [IdentifiableGraphPoint] {
-        var points: [IdentifiableGraphPoint] = []
-        let sortedActiveAxes = vm.activeAxes.sorted(by: { $0.rawValue < $1.rawValue })
-        if currentDisplayMode == .time {
-            for axisCase in sortedActiveAxes {
-                if let seriesData = vm.timeSeriesData[axisCase] {
-                    for dataPoint in seriesData { points.append(IdentifiableGraphPoint(axis: axisCase, xValue: dataPoint.timestamp, yValue: dataPoint.value)) }
-                }
-            }
-        } else {
-            guard vm.isFFTReady, !vm.fftFrequencies.isEmpty else { return [] }
-            for axisCase in sortedActiveAxes {
-                if let magnitudes = vm.fftMagnitudes[axisCase], magnitudes.count == vm.fftFrequencies.count {
-                    for i in 0..<vm.fftFrequencies.count { points.append(IdentifiableGraphPoint(axis: axisCase, xValue: vm.fftFrequencies[i], yValue: magnitudes[i])) }
-                }
-            }
-        }
-        return points
-    }
+    @StateObject private var vm = AccelerationViewModel() // Ensure vm is @StateObject
+    @State private var currentDisplayMode: GraphDisplayMode = .time // Default to time series
     
+    enum GraphDisplayMode: String, CaseIterable, Identifiable {
+        case time = "Time Series"
+        case frequency = "Frequency Spectrum"
+        var id: String { self.rawValue }
+    }
+
     private var currentGraphRanges: MultiLineGraphView.AxisRanges {
         if currentDisplayMode == .time {
-            return vm.measurementState == .idle ?
-                   MultiLineGraphView.AxisRanges(minY: -1, maxY: 1, minX: 0, maxX: vm.currentEffectiveMaxGraphDuration) :
-                   vm.axisRanges
+            // Use the dynamic ranges from the ViewModel for time series
+            return vm.axisRanges
         } else {
-            let relevantRate = vm.calculatedActualAverageSamplingRateForFFT ?? Double(vm.actualCoreMotionRequestRate)
-            let firstFreq = vm.fftFrequencies.first ?? 0.0
-            let lastFreqPossible = relevantRate / 2.0
-            let actualLastFreq = vm.fftFrequencies.last ?? lastFreqPossible
-            let nyquist = max(firstFreq, actualLastFreq, 0.1) // Ensure nyquist is at least a small positive if freqs are empty
+            // Calculate ranges for frequency spectrum (FFT data)
+            // Ensure there's a fallback if FFT data is empty or invalid
+            let firstFreq = vm.fftFrequencies.first ?? 0
+            let relevantRate = vm.calculatedActualAverageSamplingRateForFFT ?? (Double(vm.actualCoreMotionRequestRate) / 2.0) // Default to half of sampling rate if actual not available
             
-            guard vm.isFFTReady, !vm.fftFrequencies.isEmpty else {
-                return MultiLineGraphView.AxisRanges(minY: 0, maxY: 1, minX: 0, maxX: max(1.0, nyquist))
+            let lastFreqPossible = relevantRate / 2.0 // Nyquist frequency based on sampling rate
+            let actualLastFreq = vm.fftFrequencies.last ?? lastFreqPossible // Use actual last freq if available, else theoretical max
+            let nyquist = max(firstFreq, actualLastFreq, 0.1) // Ensure nyquist is at least a small positive value to avoid empty range
+
+            // Determine overall max magnitude for Y-axis scaling
+            var maxMagnitudeOverall: Double = 0.00000001 // Start with a very small epsilon to avoid zero if all magnitudes are zero
+
+            if let xMags = vm.fftMagnitudes[Axis.x], !xMags.isEmpty {
+                maxMagnitudeOverall = max(maxMagnitudeOverall, xMags.max() ?? 0)
             }
-            
-            var maxMagnitudeOverall: Double = 0.001
-            vm.activeAxes.forEach { activeAxis in
-                if let maxMagForAxis = vm.fftMagnitudes[activeAxis]?.filter({!$0.isNaN && $0.isFinite}).max(), maxMagForAxis > maxMagnitudeOverall {
-                    maxMagnitudeOverall = maxMagForAxis
-                }
+            if let yMags = vm.fftMagnitudes[Axis.y], !yMags.isEmpty {
+                maxMagnitudeOverall = max(maxMagnitudeOverall, yMags.max() ?? 0)
             }
-            if maxMagnitudeOverall <= 0.001 { // If still very small or zero
-                 maxMagnitudeOverall = vm.fftMagnitudes.values.flatMap { $0 }.allSatisfy { $0 == 0 || $0.isNaN || !$0.isFinite } ? 0.1 : 1.0
+            if let zMags = vm.fftMagnitudes[Axis.z], !zMags.isEmpty {
+                maxMagnitudeOverall = max(maxMagnitudeOverall, zMags.max() ?? 0)
             }
 
-            let minXForFFT = firstFreq
-            let maxXForFFT = max(minXForFFT + (nyquist > minXForFFT ? 0.1 : 1.0), nyquist)
+            // Ensure maxMagnitudeOverall is positive; if it's still the epsilon or less, default to 1.0
+            if maxMagnitudeOverall <= 0.00000001 { maxMagnitudeOverall = 1.0 }
 
-            return MultiLineGraphView.AxisRanges(
-                minY:0,
-                maxY:maxMagnitudeOverall.isFinite && maxMagnitudeOverall > 0 ? maxMagnitudeOverall : 0.1,
-                minX: minXForFFT,
-                maxX: maxXForFFT
-            )
+
+            return .init(minY: 0, maxY: maxMagnitudeOverall, minX: 0, maxX: nyquist)
         }
     }
+
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 10) {
-                MetricSummaryCard(
-                    latestX: vm.latestX, latestY: vm.latestY, latestZ: vm.latestZ,
-                    minX: vm.minX ?? 0.0, maxX: vm.maxX ?? 0.0,
-                    minY: vm.minY ?? 0.0, maxY: vm.maxY ?? 0.0,
-                    minZ: vm.minZ ?? 0.0, maxZ: vm.maxZ ?? 0.0,
-                    rmsX: vm.measurementState == .completed ? vm.rmsX : nil,
-                    rmsY: vm.measurementState == .completed ? vm.rmsY : nil,
-                    rmsZ: vm.measurementState == .completed ? vm.rmsZ : nil
-                ).padding(.horizontal)
+            VStack(spacing: 0) { // Ensure no unintended spacing issues
 
+                // Display Mode Picker
                 Picker("Display Mode", selection: $currentDisplayMode) {
-                    Text("Time Series").tag(DisplayMode.time); Text("Frequency").tag(DisplayMode.frequency)
-                }.pickerStyle(.segmented).padding(.horizontal)
+                    ForEach(GraphDisplayMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.horizontal)
+                .padding(.vertical, 8) // Add some vertical padding
 
+                // Graph Area
+                MultiLineGraphView(
+                    timeSeriesData: vm.timeSeriesData,
+                    fftFrequencies: vm.fftFrequencies,
+                    fftMagnitudes: vm.fftMagnitudes,
+                    axisRanges: currentGraphRanges, // Use the dynamic ranges
+                    displayMode: currentDisplayMode,
+                    activeAxes: vm.activeAxes // Pass activeAxes
+                )
+                .frame(maxHeight: 300) // Keep reasonable fixed height for graph
+                .padding(.horizontal) // Add horizontal padding
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color(UIColor.systemGray6))) // Subtle background
+                .padding(.horizontal) // Padding for the background itself
+                .padding(.bottom, 8) // Space before next element
+
+                // Status Text Area
                 HStack {
-                    HStack(spacing: 8) {
-                        Text("Axis:").font(.callout).foregroundColor(.secondary)
-                        ForEach(Axis.allCases) { axisCase in Button(axisCase.rawValue.uppercased()) { Haptics.tap(); vm.toggleAxisVisibility(axisCase) }
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(vm.activeAxes.contains(axisCase) ? (axisColors[axisCase] ?? .accentColor).opacity(0.25) : Color(UIColor.systemGray5))
-                                .foregroundColor(vm.activeAxes.contains(axisCase) ? (axisColors[axisCase] ?? .accentColor) : Color(UIColor.label).opacity(0.7))
-                                .cornerRadius(7)
-                        }
-                    }.animation(.easeInOut(duration: 0.2), value: vm.activeAxes)
+                    Text(vm.currentStatusText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     Spacer()
-                    
-                    if vm.measurementState == .preRecordingCountdown || (vm.isRecording && vm.autoStopRecordingEnabled && vm.measurementDurationSetting > 0) {
-                        Text(String(format: "%.1f s", vm.timeLeft))
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundColor(vm.timeLeft < 5 && vm.timeLeft > 0 && vm.measurementState == .recording ? .red : .orange)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(Color(UIColor.systemGray5).opacity(0.7)).cornerRadius(6)
-                            .frame(minWidth: 60, alignment: .center)
-                            .transition(.opacity.combined(with: .scale))
-                    } else { Rectangle().fill(Color.clear).frame(minWidth: 60, maxWidth: 60) }
-                    if vm.useLinearAccelerationSetting { Spacer(minLength: 10) }
-                    
-                    if vm.useLinearAccelerationSetting {
-                        HStack(spacing: 6) { BubbleLevelView(roll: vm.currentRoll, pitch: vm.currentPitch)
-                            VStack(alignment: .leading, spacing: 1) { Text(String(format: "R: %+.1f°", vm.currentRoll)); Text(String(format: "P: %+.1f°", vm.currentPitch))
-                            }.font(.system(size: 10, design: .monospaced)).foregroundColor(.secondary)
-                        }.transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    if vm.measurementState == .recording || vm.measurementState == .preRecordingCountdown {
+                        Text("Time Left: \(vm.timeLeft, specifier: "%.1f")s")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(minWidth: 100, alignment: .trailing) // Ensure width for time display
+                    } else if vm.measurementState == .completed {
+                         Text("Total Time: \(vm.elapsedTime, specifier: "%.2f")s")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(minWidth: 100, alignment: .trailing)
                     }
                 }
-                .padding(.horizontal).frame(height: 38)
-                .animation(.default, value: vm.timeLeft)
-                .animation(.easeInOut(duration: 0.3), value: vm.useLinearAccelerationSetting)
-                .animation(.spring(response:0.3,dampingFraction:0.7), value:vm.currentRoll)
-                .animation(.spring(response:0.3,dampingFraction:0.7), value:vm.currentPitch)
+                .padding(.horizontal)
+                .padding(.vertical, 4) // Minimal vertical padding for status
 
-                HStack {
-                    Text(String(format: "Rec Time: %.2f s", vm.elapsedTime)).font(.caption).foregroundColor(.secondary)
-                    Spacer(); Text(vm.currentStatusText).id(vm.currentStatusText).font(.caption).foregroundColor(.secondary)
-                    Spacer(); Text("Samples: \(vm.collectedSamplesCount)").font(.caption).foregroundColor(.secondary)
-                }.padding(.horizontal)
+                // Metrics Summary (conditionally shown)
+                if vm.measurementState == .completed && vm.collectedSamplesCount > 0 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack {
+                            MetricSummaryCard(title: "RMS X", value: vm.rmsX, unit: "g", peakFrequency: vm.peakFrequencyX)
+                            MetricSummaryCard(title: "RMS Y", value: vm.rmsY, unit: "g", peakFrequency: vm.peakFrequencyY)
+                            MetricSummaryCard(title: "RMS Z", value: vm.rmsZ, unit: "g", peakFrequency: vm.peakFrequencyZ)
+                        }
+                        .padding(.horizontal) // Horizontal padding for scroll content
+                        .padding(.vertical, 4) // Some vertical padding around cards
+                    }
+                    .frame(height: 100) // Fixed height for summary cards area
+                } else {
+                    // Placeholder for consistent layout when summary cards are not shown
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(height: 100)
+                        .padding(.horizontal)
+                        .padding(.vertical, 4)
+                }
                 
-                MultiLineGraphView(plotData: graphPlotData, ranges: currentGraphRanges,
-                    isFrequencyDomain: currentDisplayMode == .frequency, axisColors: axisColors
-                ).id("\(currentDisplayMode)-\(vm.activeAxes.hashValue)-\(vm.measurementState.hashValue)-\(vm.isRecording)")
+                // Bubble Level (conditionally shown based on setting)
+                if vm.useLinearAccelerationSetting {
+                    BubbleLevelView(roll: vm.currentRoll, pitch: vm.currentPitch)
+                        .frame(width: 100, height: 100) // Example fixed size
+                        .padding(.vertical, 4) // Padding around bubble level
+                }
 
-                HStack(spacing: 20) {
-                    Button { Haptics.tap()
-                        if vm.measurementState == .preRecordingCountdown || vm.isRecording { vm.stopMeasurement() }
-                        else { vm.startMeasurement() }
-                    } label: {
-                        Label((vm.measurementState == .preRecordingCountdown || vm.isRecording) ? "Stop" : "Start",
-                               systemImage: (vm.measurementState == .preRecordingCountdown || vm.isRecording) ? "stop.fill" : "play.fill")
-                            .fontWeight(.medium).frame(maxWidth: .infinity)
+
+                // Controls Area
+                HStack(spacing: 10) { // Add spacing between buttons
+                    Button(action: {
+                        if vm.isRecording || vm.measurementState == .preRecordingCountdown {
+                            Task { await vm.stopMeasurement() }
+                        } else {
+                            Task { await vm.startMeasurement() }
+                        }
+                    }) {
+                        Text(vm.isRecording || vm.measurementState == .preRecordingCountdown ? "Stop" : "Start")
+                            .frame(minWidth: 0, maxWidth: .infinity) // Make buttons expand
+                            .padding()
+                            .background(vm.isRecording || vm.measurementState == .preRecordingCountdown ? Color.red : Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
                     }
-                    .buttonStyle(.borderedProminent).tint((vm.measurementState == .preRecordingCountdown || vm.isRecording) ? .red : .green).controlSize(.large)
-                    .disabled(vm.measurementState == .completed && vm.collectedSamplesCount > 0 && !(vm.measurementState == .preRecordingCountdown || vm.isRecording) )
 
-                    Button { Haptics.tap(); vm.resetMeasurement() }
-                    label: { Label("Reset", systemImage: "arrow.clockwise").fontWeight(.medium).frame(maxWidth: .infinity) }
-                    .buttonStyle(.bordered).controlSize(.large)
-                    .disabled(vm.measurementState == .preRecordingCountdown || vm.isRecording)
+                    Button(action: {
+                        Task { await vm.resetMeasurement() }
+                    }) {
+                        Text("Reset")
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                            .padding()
+                            .background(Color.orange)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .disabled(vm.isRecording || vm.measurementState == .preRecordingCountdown) // Disable if recording or counting down
+
+                    Button(action: {
+                        vm.exportCSV() // exportCSV is synchronous in ViewModel
+                    }) {
+                        Image(systemName: "square.and.arrow.up")
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                            .padding()
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .disabled(vm.isRecording || vm.measurementState == .preRecordingCountdown || vm.collectedSamplesCount == 0)
                 }
-                .padding([.horizontal, .bottom]).padding(.top, 5)
-            }
-            .navigationTitle("Real-Time Data").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { Haptics.tap(); vm.exportCSV() }
-                    label: { Image(systemName: "square.and.arrow.up") }
-                    .disabled(vm.isRecording || vm.measurementState == .preRecordingCountdown || (vm.collectedSamplesCount == 0 && vm.measurementState != .idle))
+                .padding() // Padding around the HStack of buttons
+                .background(Color(UIColor.systemGray5)) // Background for control area
+
+            } // End Main VStack
+            .navigationTitle("Real-Time Data")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { // Toolbar for axis toggles
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    HStack {
+                        Text("Axes:").font(.caption)
+                        Button(action: { vm.toggleAxisVisibility(.x) }) {
+                            Text("X").foregroundColor(vm.activeAxes.contains(.x) ? .red : .gray)
+                        }
+                        Button(action: { vm.toggleAxisVisibility(.y) }) {
+                            Text("Y").foregroundColor(vm.activeAxes.contains(.y) ? .green : .gray)
+                        }
+                        Button(action: { vm.toggleAxisVisibility(.z) }) {
+                            Text("Z").foregroundColor(vm.activeAxes.contains(.z) ? .blue : .gray)
+                        }
+                    }
                 }
             }
-            .onChange(of: currentDisplayMode) { // Simpler onChange for newer Swift
-                if currentDisplayMode == .frequency && vm.measurementState == .completed && !vm.isFFTReady {
-                     vm.computeFFT()
-                }
+        } // End NavigationView
+        .navigationViewStyle(StackNavigationViewStyle()) // Use stack style for consistent behavior
+        .onChange(of: currentDisplayMode) { oldValue, newValue in // Updated onChange syntax
+            if newValue == .frequency && vm.collectedSamplesCount > 0 && !vm.isFFTReady {
+                // If switching to frequency view and FFT is not ready, compute it.
+                Task { await vm.computeFFT() }
             }
-            .onAppear {
-                 if vm.measurementState == .idle {
-                     vm.timeLeft = vm.currentInitialTimeLeft
-                     vm.axisRanges.maxX = vm.currentEffectiveMaxGraphDuration
-                 }
-                 if vm.useLinearAccelerationSetting { vm.startLiveAttitudeMonitoring() }
-            }
-            .onDisappear { vm.stopLiveAttitudeMonitoring() }
         }
-        .navigationViewStyle(.stack)
+        .onAppear {
+            // Assuming vm.startLiveAttitudeMonitoring is now async
+            Task { await vm.startLiveAttitudeMonitoring() }
+        }
+        .onDisappear {
+            // Assuming vm.stopLiveAttitudeMonitoring is now async
+            // Based on previous changes, stopLiveAttitudeMonitoring was kept synchronous.
+            // If it was made async, this needs `Task { await vm.stopLiveAttitudeMonitoring() }`
+            // For now, assuming it's synchronous as per my last ViewModel output for this branch.
+            // Update: Prompt says "assuming stopLiveAttitudeMonitoring ... is now the async version"
+            Task { await vm.stopLiveAttitudeMonitoring() }
+        }
     }
 }
-#Preview { RealTimeDataView() }
+
+struct RealTimeDataView_Previews: PreviewProvider {
+    static var previews: some View {
+        RealTimeDataView()
+    }
+}

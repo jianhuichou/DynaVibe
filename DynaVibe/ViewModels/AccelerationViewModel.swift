@@ -32,53 +32,53 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
 
     // MARK: - Settings
     @AppStorage("samplingRateSettingStorage") var samplingRateSettingStorage: Int = 128 {
-        didSet { self.updateSettingsDependentState() }
+        didSet { updateSettingsDependentState() }
     }
     @AppStorage("measurementDurationSetting") var measurementDurationSetting: Double = 10.0 {
-        didSet { self.updateSettingsDependentState() }
+        didSet { updateSettingsDependentState() }
     }
     @AppStorage("recordingStartDelaySetting") var recordingStartDelaySetting: Double = 3.0 {
-        didSet { self.updateSettingsDependentState() }
+        didSet { updateSettingsDependentState() }
     }
     @AppStorage("autoStopRecordingEnabled") var autoStopRecordingEnabled: Bool = true {
-        didSet { self.updateSettingsDependentState() }
+        didSet { updateSettingsDependentState() }
     }
     @AppStorage("useLinearAccelerationSetting") var useLinearAccelerationSetting: Bool = false {
-        didSet { if oldValue != self.useLinearAccelerationSetting { self.toggleLiveAttitudeBasedOnSetting() } }
+        didSet { if oldValue != useLinearAccelerationSetting { toggleLiveAttitudeBasedOnSetting() } }
     }
 
     // MARK: - Computed Properties
     var actualCoreMotionRequestRate: Int {
-        switch self.samplingRateSettingStorage {
+        switch samplingRateSettingStorage {
         case 0: return 1000
-        case 32, 64, 128: return self.samplingRateSettingStorage
+        case 32, 64, 128: return samplingRateSettingStorage
         default: return 128
         }
     }
     var currentStatusText: String {
-        switch self.measurementState {
+        switch measurementState {
         case .idle: return "Idle"
         case .preRecordingCountdown: return "Starting in..."
-        case .recording: return self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 ? "Recording..." : "Recording (Manual Stop)"
+        case .recording: return autoStopRecordingEnabled && measurementDurationSetting > 0 ? "Recording..." : "Recording (Manual Stop)"
         case .completed: return "Completed"
         }
     }
     var currentEffectiveMaxGraphDuration: Double {
-        self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 ? self.measurementDurationSetting : 10.0
+        autoStopRecordingEnabled && measurementDurationSetting > 0 ? measurementDurationSetting : 10.0
     }
     var currentInitialTimeLeft: Double {
-        self.recordingStartDelaySetting > 0 ? self.recordingStartDelaySetting : (self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 ? self.measurementDurationSetting : 0)
+        recordingStartDelaySetting > 0 ? recordingStartDelaySetting : (autoStopRecordingEnabled && measurementDurationSetting > 0 ? measurementDurationSetting : 0)
     }
-    var collectedSamplesCount: Int { self.timeSeriesData[Axis.x]?.count ?? 0 }
-    var minX: Double? { self.timeSeriesData[Axis.x]?.min(by: { $0.value < $1.value })?.value }
-    var maxX: Double? { self.timeSeriesData[Axis.x]?.max(by: { $0.value < $1.value })?.value }
-    var minY: Double? { self.timeSeriesData[Axis.y]?.min(by: { $0.value < $1.value })?.value }
-    var maxY: Double? { self.timeSeriesData[Axis.y]?.max(by: { $0.value < $1.value })?.value }
-    var minZ: Double? { self.timeSeriesData[Axis.z]?.min(by: { $0.value < $1.value })?.value }
-    var maxZ: Double? { self.timeSeriesData[Axis.z]?.max(by: { $0.value < $1.value })?.value }
-    var peakFrequencyX: Double? { self.findPeakFrequency(for: .x) }
-    var peakFrequencyY: Double? { self.findPeakFrequency(for: .y) }
-    var peakFrequencyZ: Double? { self.findPeakFrequency(for: .z) }
+    var collectedSamplesCount: Int { timeSeriesData[Axis.x]?.count ?? 0 }
+    var minX: Double? { timeSeriesData[Axis.x]?.min(by: { $0.value < $1.value })?.value }
+    var maxX: Double? { timeSeriesData[Axis.x]?.max(by: { $0.value < $1.value })?.value }
+    var minY: Double? { timeSeriesData[Axis.y]?.min(by: { $0.value < $1.value })?.value }
+    var maxY: Double? { timeSeriesData[Axis.y]?.max(by: { $0.value < $1.value })?.value }
+    var minZ: Double? { timeSeriesData[Axis.z]?.min(by: { $0.value < $1.value })?.value }
+    var maxZ: Double? { timeSeriesData[Axis.z]?.max(by: { $0.value < $1.value })?.value }
+    var peakFrequencyX: Double? { findPeakFrequency(for: .x) }
+    var peakFrequencyY: Double? { findPeakFrequency(for: .y) }
+    var peakFrequencyZ: Double? { findPeakFrequency(for: .z) }
     var calculatedActualAverageSamplingRateForFFT: Double?
 
     // MARK: - Private Properties
@@ -96,80 +96,96 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         self.recorder = AccelerationRecorder()
         self.fftAnalyzer = FFTAnalysis()
         super.init()
-        self.recorder.motionSessionPublic.samplingRate = self.actualCoreMotionRequestRate
-        Axis.allCases.forEach { axis in
-            self.timeSeriesData[axis] = []
-            self.fftMagnitudes[axis] = []
-        }
-        self.updateIdleStateDisplayValues()
-        self.resetRMSValuesAndAttitude()
-        if self.useLinearAccelerationSetting {
-            self.startLiveAttitudeMonitoring()
+
+        Task { @MainActor [weak self] in
+            guard let strongSelf = self else { return }
+            strongSelf.recorder.motionSessionPublic.samplingRate = strongSelf.actualCoreMotionRequestRate
+            Axis.allCases.forEach { axis in
+                strongSelf.timeSeriesData[axis] = []
+                strongSelf.fftMagnitudes[axis] = []
+            }
+            await strongSelf.updateIdleStateDisplayValues()
+            await strongSelf.resetRMSValuesAndAttitude()
+            if strongSelf.useLinearAccelerationSetting {
+                await strongSelf.startLiveAttitudeMonitoring()
+            }
         }
     }
 
     deinit {
-        self.stopLiveAttitudeMonitoring()
-        self.dataFetchTimer?.invalidate()
-        self.durationCountdownTimer?.invalidate()
-        self.preRecordingDelayTimer?.invalidate()
-        if self.isRecording || self.measurementState == .preRecordingCountdown {
-            self.recorder.stopRecording()
-        }
-    }
-    
-    private func updateSettingsDependentState() {
-        if self.measurementState == .idle && !self.isRecording {
-            self.recorder.motionSessionPublic.samplingRate = self.actualCoreMotionRequestRate
-            self.updateIdleStateDisplayValues()
+        stopLiveAttitudeMonitoring() // This is synchronous
+        dataFetchTimer?.invalidate()
+        durationCountdownTimer?.invalidate()
+        preRecordingDelayTimer?.invalidate()
+        if isRecording || measurementState == .preRecordingCountdown {
+            recorder.stopRecording()
         }
     }
 
-    private func updateIdleStateDisplayValues() {
-        self.timeLeft = self.currentInitialTimeLeft
-        self.axisRanges.maxX = self.currentEffectiveMaxGraphDuration
+    private func updateSettingsDependentState() {
+        Task { @MainActor [weak self] in
+            guard let strongSelf = self else { return }
+            if strongSelf.measurementState == .idle && !strongSelf.isRecording {
+                strongSelf.recorder.motionSessionPublic.samplingRate = strongSelf.actualCoreMotionRequestRate
+                await strongSelf.updateIdleStateDisplayValues()
+            }
+        }
+    }
+
+    private func updateIdleStateDisplayValues() async {
+        // Since this func updates @Published properties, it should be on the MainActor.
+        // Task { @MainActor in } // No, this is already MainActor if called from MainActor context or is @MainActor func
+        self.timeLeft = currentInitialTimeLeft
+        self.axisRanges.maxX = currentEffectiveMaxGraphDuration
         self.elapsedTime = 0
     }
 
     // MARK: - Helper Methods
-    private func resetRMSValuesAndAttitude() {
+    private func resetRMSValuesAndAttitude() async {
+        // Task { @MainActor in } // No, this is already MainActor if called from MainActor context or is @MainActor func
         self.rmsX = 0.0; self.rmsY = 0.0; self.rmsZ = 0.0
-        Task { @MainActor [weak self] in // Added [weak self]
+        // This inner Task is to ensure roll/pitch are set on MainActor, which is good practice.
+        await Task { @MainActor [weak self] in
             guard let strongSelf = self else { return }
             strongSelf.currentRoll = 0.0; strongSelf.currentPitch = 0.0
-        }
+        }.value
     }
 
     private func findPeakFrequency(for axis: Axis) -> Double? {
-        guard let magnitudes = self.fftMagnitudes[axis], !magnitudes.isEmpty,
-              !self.fftFrequencies.isEmpty, magnitudes.count == self.fftFrequencies.count else { return nil }
-        return zip(self.fftFrequencies, magnitudes).max(by: { $0.1 < $1.1 })?.0
+        guard let magnitudes = fftMagnitudes[axis], !magnitudes.isEmpty,
+              !fftFrequencies.isEmpty, magnitudes.count == fftFrequencies.count else { return nil }
+        return zip(fftFrequencies, magnitudes).max(by: { $0.1 < $1.1 })?.0
     }
 
     private func toggleLiveAttitudeBasedOnSetting() {
-        if self.useLinearAccelerationSetting { self.startLiveAttitudeMonitoring() }
-        else { self.stopLiveAttitudeMonitoring() }
+        Task { @MainActor [weak self] in
+            guard let strongSelf = self else { return }
+            if strongSelf.useLinearAccelerationSetting {
+                await strongSelf.startLiveAttitudeMonitoring()
+            } else {
+                strongSelf.stopLiveAttitudeMonitoring()
+            }
+        }
     }
 
-    func startLiveAttitudeMonitoring() {
-        guard self.useLinearAccelerationSetting, !self.isLiveAttitudeMonitoringActive, self.motionSessionForLiveAttitude.isDeviceMotionAvailable else { return }
-        self.isLiveAttitudeMonitoringActive = true
-        self.motionSessionForLiveAttitude.provideUserAccelerationFromDeviceMotion = true
-        _ = self.motionSessionForLiveAttitude.startDeviceMotionUpdates(for: self, interval: self.liveAttitudeUpdateInterval) { [weak self] (payload, error) in
+    func startLiveAttitudeMonitoring() async {
+        guard useLinearAccelerationSetting, !isLiveAttitudeMonitoringActive, motionSessionForLiveAttitude.isDeviceMotionAvailable else { return }
+        isLiveAttitudeMonitoringActive = true
+        motionSessionForLiveAttitude.provideUserAccelerationFromDeviceMotion = true
+        _ = motionSessionForLiveAttitude.startDeviceMotionUpdates(for: self, interval: liveAttitudeUpdateInterval) { [weak self] (payload, error) in
             guard let strongSelf = self, strongSelf.isLiveAttitudeMonitoringActive, let dataPayload = payload, error == nil else { return }
-            Task { @MainActor [weak strongSelf] in // Nested Task, capture strongSelf weakly
-                guard let sSelf = strongSelf else { return }
-                sSelf.currentRoll = dataPayload.attitude.roll * 180.0 / .pi
-                sSelf.currentPitch = dataPayload.attitude.pitch * 180.0 / .pi
+            Task { @MainActor in // This Task is for the CM completion handler
+                strongSelf.currentRoll = dataPayload.attitude.roll * 180.0 / .pi
+                strongSelf.currentPitch = dataPayload.attitude.pitch * 180.0 / .pi
             }
         }
     }
 
     func stopLiveAttitudeMonitoring() {
-        guard self.isLiveAttitudeMonitoringActive else { return }
-        self.isLiveAttitudeMonitoringActive = false
-        self.motionSessionForLiveAttitude.stopDeviceMotionUpdates(for: self)
-        Task { @MainActor [weak self] in // Added [weak self]
+        guard isLiveAttitudeMonitoringActive else { return }
+        isLiveAttitudeMonitoringActive = false
+        motionSessionForLiveAttitude.stopDeviceMotionUpdates(for: self)
+        Task { @MainActor [weak self] in
             guard let strongSelf = self else { return }
             strongSelf.currentRoll = 0.0
             strongSelf.currentPitch = 0.0
@@ -178,201 +194,231 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
 
     // MARK: - Main Measurement Control
     @MainActor
-    func startMeasurement() {
-        guard self.measurementState == .idle else { return }
-        self.resetDataForNewRecording() // This line should be fine as it's directly in the method body
-        
-        if self.recordingStartDelaySetting > 0 {
-            self.measurementState = .preRecordingCountdown
-            self.isRecording = false
-            self.timeLeft = self.recordingStartDelaySetting
-            self.preRecordingPhaseStartTime = Date()
-            self.axisRanges.maxX = self.recordingStartDelaySetting
-            
-            self.preRecordingDelayTimer?.invalidate()
-            self.preRecordingDelayTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timerRef in
-                guard let strongSelf = self else { timerRef.invalidate(); return }
-                // Task wrapper is kept as it seems to manage countdown state updates before calling beginActualRecording.
-                // beginActualRecording is @MainActor, other property accesses are on strongSelf.
-                Task { @MainActor in // No need to recapture self, uses strongSelf from timer closure.
-                    guard strongSelf.measurementState == .preRecordingCountdown else {
-                        timerRef.invalidate(); // Ensure timer stops if state is no longer preRecordingCountdown
-                        return
+    func startMeasurement() async {
+        guard measurementState == .idle else { return }
+        await resetDataForNewRecording()
+
+        if recordingStartDelaySetting > 0 {
+            measurementState = .preRecordingCountdown
+            isRecording = false
+            timeLeft = recordingStartDelaySetting
+            preRecordingPhaseStartTime = Date()
+            axisRanges.maxX = recordingStartDelaySetting
+
+            preRecordingDelayTimer?.invalidate()
+            preRecordingDelayTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timerRef in
+                Task { @MainActor in
+                    guard let strongSelf = self, strongSelf.measurementState == .preRecordingCountdown else { // Use strongSelf
+                        timerRef.invalidate(); return
                     }
                     if let delayStartTime = strongSelf.preRecordingPhaseStartTime {
                         let elapsedDelay = Date().timeIntervalSince(delayStartTime)
                         strongSelf.timeLeft = max(0, strongSelf.recordingStartDelaySetting - elapsedDelay)
                         if elapsedDelay >= strongSelf.recordingStartDelaySetting {
                             timerRef.invalidate(); strongSelf.preRecordingDelayTimer = nil
-                            strongSelf.beginActualRecording()
+                            await strongSelf.beginActualRecording()
                         }
-                    } else { // This case implies preRecordingPhaseStartTime was nil
+                    } else {
                         timerRef.invalidate(); strongSelf.preRecordingDelayTimer = nil
-                        strongSelf.measurementState = .idle 
+                        strongSelf.measurementState = .idle
                     }
                 }
             }
         } else {
-            self.beginActualRecording()
+            await beginActualRecording()
         }
     }
 
     @MainActor
-    private func beginActualRecording() {
-        self.measurementState = .recording
-        self.isRecording = true
-        
-        self.recordingActualStartTime = Date()
-        self.elapsedTime = 0.0
-        self.timeLeft = self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 ? self.measurementDurationSetting : 0
-        
-        self.axisRanges.minX = 0
-        self.axisRanges.maxX = self.currentEffectiveMaxGraphDuration
+    private func beginActualRecording() async {
+        measurementState = .recording
+        isRecording = true
 
-        self.lastProcessedSampleTimestamp = 0; self.calculatedActualAverageSamplingRateForFFT = nil
-        
-        self.recorder.useDeviceMotionForData = self.useLinearAccelerationSetting
-        if self.recorder.useDeviceMotionForData {
-             self.recorder.motionSessionPublic.provideUserAccelerationFromDeviceMotion = self.useLinearAccelerationSetting
+        recordingActualStartTime = Date()
+        elapsedTime = 0.0
+        timeLeft = autoStopRecordingEnabled && measurementDurationSetting > 0 ? measurementDurationSetting : 0
+
+        axisRanges.minX = 0
+        axisRanges.maxX = currentEffectiveMaxGraphDuration
+
+        lastProcessedSampleTimestamp = 0; calculatedActualAverageSamplingRateForFFT = nil
+
+        recorder.useDeviceMotionForData = useLinearAccelerationSetting
+        if recorder.useDeviceMotionForData {
+             recorder.motionSessionPublic.provideUserAccelerationFromDeviceMotion = useLinearAccelerationSetting
         }
-        self.recorder.motionSessionPublic.samplingRate = self.actualCoreMotionRequestRate
-        self.recorder.clear(); self.recorder.startRecording()
+        recorder.motionSessionPublic.samplingRate = self.actualCoreMotionRequestRate
+        recorder.clear(); recorder.startRecording()
 
         let fetchInterval = 1.0 / Double(max(100, self.actualCoreMotionRequestRate))
-        self.dataFetchTimer?.invalidate()
-        // captureNewSamples is @MainActor, so the Task wrapper is redundant if the timer fires on main.
-        // However, to be safe and explicit, especially if timer's thread isn't guaranteed or for clarity:
-        self.dataFetchTimer = Timer.scheduledTimer(withTimeInterval:max(0.005,fetchInterval/2.0),repeats:true){ [weak self] timerRef in
-            guard let strongSelf = self else { timerRef.invalidate(); return }
-            Task { @MainActor in // Explicitly ensuring MainActor context for safety
+        dataFetchTimer?.invalidate()
+        dataFetchTimer = Timer.scheduledTimer(withTimeInterval:max(0.005,fetchInterval/2.0),repeats:true){ [weak self] timerRef in
+            Task { @MainActor in
+                guard let strongSelf = self else { timerRef.invalidate(); return }
                 strongSelf.captureNewSamples()
             }
         }
-        
-        self.durationCountdownTimer?.invalidate()
+
+        durationCountdownTimer?.invalidate()
         let timerInterval = 0.05
-        self.durationCountdownTimer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { [weak self] timerRef in
-            guard let strongSelf = self else { timerRef.invalidate(); return }
-            // Task wrapper is kept as there are multiple state updates and method calls.
-            Task { @MainActor in // Explicitly ensuring MainActor context
-                guard strongSelf.isRecording else { timerRef.invalidate(); return } // Check isRecording status inside task
-                
-                if let rST = strongSelf.recordingActualStartTime { strongSelf.elapsedTime = Date().timeIntervalSince(rST) } else { strongSelf.elapsedTime += timerInterval }
-                if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 { strongSelf.timeLeft = max(0, strongSelf.measurementDurationSetting - strongSelf.elapsedTime) }
-                
+        durationCountdownTimer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { [weak self] timerRef in
+            Task { @MainActor in
+                guard let strongSelf = self, strongSelf.isRecording else {
+                    timerRef.invalidate(); return
+                }
+                if let recStartTime = strongSelf.recordingActualStartTime {
+                    strongSelf.elapsedTime = Date().timeIntervalSince(recStartTime)
+                } else {
+                    strongSelf.elapsedTime += timerInterval
+                }
+
+                if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 {
+                    strongSelf.timeLeft = max(0, strongSelf.measurementDurationSetting - strongSelf.elapsedTime)
+                }
+
                 if strongSelf.measurementState == .recording {
                     let cmt = strongSelf.timeSeriesData[Axis.x]?.last?.timestamp ?? strongSelf.elapsedTime
                     if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 {
-                        strongSelf.axisRanges.minX = 0; strongSelf.axisRanges.maxX = max(strongSelf.measurementDurationSetting, cmt + 0.2)
-                    } else { 
-                        let windowDur = 10.0
-                        strongSelf.axisRanges.minX = max(0, strongSelf.elapsedTime - windowDur)
-                        strongSelf.axisRanges.maxX = strongSelf.elapsedTime + 0.2 
+                        strongSelf.axisRanges.minX = 0
+                        strongSelf.axisRanges.maxX = max(strongSelf.measurementDurationSetting, cmt + 0.2)
+                    } else {
+                        let windowDuration = 10.0
+                        strongSelf.axisRanges.minX = max(0, strongSelf.elapsedTime - windowDuration)
+                        strongSelf.axisRanges.maxX = strongSelf.elapsedTime + 0.2
                     }
                 }
                 if strongSelf.autoStopRecordingEnabled && strongSelf.measurementDurationSetting > 0 && strongSelf.elapsedTime >= strongSelf.measurementDurationSetting {
-                    strongSelf.stopMeasurement()
+                    await strongSelf.stopMeasurement()
                 }
             }
-        }}
+        }
     }
-    
+
     @MainActor
-    func stopMeasurement() {
-        let wasPreRecording = (self.measurementState == .preRecordingCountdown)
-        
-        self.preRecordingDelayTimer?.invalidate(); self.preRecordingDelayTimer = nil
-        self.durationCountdownTimer?.invalidate(); self.durationCountdownTimer = nil
-        self.dataFetchTimer?.invalidate(); self.dataFetchTimer = nil
-        
-        if self.isRecording {
-            self.recorder.stopRecording()
-            // captureNewSamples is @MainActor.
+    func stopMeasurement() async {
+        let wasPreRecording = (measurementState == .preRecordingCountdown)
+
+        preRecordingDelayTimer?.invalidate(); preRecordingDelayTimer = nil
+        durationCountdownTimer?.invalidate(); durationCountdownTimer = nil
+        dataFetchTimer?.invalidate(); dataFetchTimer = nil
+
+        if isRecording {
+            recorder.stopRecording()
             Task { @MainActor [weak self] in
-                guard let strongSelf = self else { return }
-                strongSelf.captureNewSamples()
+                 guard let strongSelf = self else { return }
+                 strongSelf.captureNewSamples()
             }
         }
-        self.isRecording = false
-        self.measurementState = wasPreRecording ? .idle : .completed
-        
-        // Methods called directly on self (now strongSelf if in a closure context)
-        // or properties of self are generally fine if self is guaranteed to be valid.
-        // The @MainActor annotation on the function itself helps, but closures inside need care.
+
+        isRecording = false
+        measurementState = wasPreRecording ? .idle : .completed
+
         if !wasPreRecording {
-            if let sT = self.recordingActualStartTime { self.elapsedTime = Date().timeIntervalSince(sT) }
-            if self.autoStopRecordingEnabled && self.measurementDurationSetting > 0 { self.timeLeft = max(0, self.measurementDurationSetting - self.elapsedTime) } else { self.timeLeft = 0 }
-            let fMT = Axis.allCases.compactMap { axKey in self.timeSeriesData[axKey]?.last?.timestamp }.max() ?? self.elapsedTime
-            self.axisRanges.minX = 0
-            self.axisRanges.maxX = max(fMT, self.currentEffectiveMaxGraphDuration)
-            if self.collectedSamplesCount > 0 {
-                self.rmsX = self.calculateOverallRMS(for: .x)
-                self.rmsY = self.calculateOverallRMS(for: .y)
-                self.rmsZ = self.calculateOverallRMS(for: .z)
-            } else {
-                self.resetRMSValuesAndAttitude()
+            if let startTime = recordingActualStartTime {
+                elapsedTime = Date().timeIntervalSince(startTime)
             }
-            self.calculateActualAverageRate()
-            if self.collectedSamplesCount > 0 { self.computeFFT() } else { self.isFFTReady = false; self.calculatedActualAverageSamplingRateForFFT = nil }
+            if autoStopRecordingEnabled && measurementDurationSetting > 0 {
+                timeLeft = max(0, measurementDurationSetting - elapsedTime)
+            } else {
+                timeLeft = 0
+            }
+
+            let finalMaxTimestamp = Axis.allCases.compactMap { timeSeriesData[$0]?.last?.timestamp }.max() ?? elapsedTime
+            axisRanges.minX = 0
+            axisRanges.maxX = max(finalMaxTimestamp, currentEffectiveMaxGraphDuration)
+
+            if collectedSamplesCount > 0 {
+                self.rmsX = calculateOverallRMS(for: .x)
+                self.rmsY = calculateOverallRMS(for: .y)
+                self.rmsZ = calculateOverallRMS(for: .z)
+            } else {
+                await resetRMSValuesAndAttitude()
+            }
+
+            calculateActualAverageRate()
+            if collectedSamplesCount > 0 {
+                await computeFFT()
+            } else {
+                isFFTReady = false
+                calculatedActualAverageSamplingRateForFFT = nil
+            }
         } else {
-            self.updateIdleStateDisplayValues()
+            await updateIdleStateDisplayValues()
         }
-        self.recordingActualStartTime = nil
-        self.preRecordingPhaseStartTime = nil
-        if self.useLinearAccelerationSetting {
-            self.startLiveAttitudeMonitoring()
+
+        recordingActualStartTime = nil
+        preRecordingPhaseStartTime = nil
+        if useLinearAccelerationSetting {
+             await startLiveAttitudeMonitoring()
         }
     }
 
     @MainActor
-    func resetMeasurement() {
-        if self.isRecording || self.measurementState == .preRecordingCountdown { self.stopMeasurement() }
-        self.resetDataForNewRecording()
-        self.measurementState = .idle; self.isFFTReady = false; self.elapsedTime = 0
-        self.updateIdleStateDisplayValues()
-        self.latestX = 0; self.latestY = 0; self.latestZ = 0; self.calculatedActualAverageSamplingRateForFFT = nil; self.currentRoll = 0; self.currentPitch = 0
-        self.recordingActualStartTime = nil; self.preRecordingPhaseStartTime = nil
-        if self.useLinearAccelerationSetting { self.startLiveAttitudeMonitoring() }
-        else { self.stopLiveAttitudeMonitoring() }
+    func resetMeasurement() async {
+        if isRecording || measurementState == .preRecordingCountdown {
+            await stopMeasurement()
+        }
+        await resetDataForNewRecording()
+        measurementState = .idle
+        isFFTReady = false
+        await updateIdleStateDisplayValues()
+
+        latestX = 0; latestY = 0; latestZ = 0
+        calculatedActualAverageSamplingRateForFFT = nil
+        // currentRoll/Pitch are reset within resetDataForNewRecording via resetRMSValuesAndAttitude
+        recordingActualStartTime = nil
+        preRecordingPhaseStartTime = nil
+        if useLinearAccelerationSetting {
+            await startLiveAttitudeMonitoring()
+        } else {
+            stopLiveAttitudeMonitoring()
+        }
     }
 
     @MainActor
-    func resetDataForNewRecording() {
-        Axis.allCases.forEach { aKey in self.timeSeriesData[aKey]?.removeAll(); self.fftMagnitudes[aKey]?.removeAll() }
-        self.fftFrequencies.removeAll(); self.lastProcessedSampleTimestamp = 0
-        self.resetRMSValuesAndAttitude()
+    private func resetDataForNewRecording() async {
+        Axis.allCases.forEach { axis in
+            timeSeriesData[axis]?.removeAll()
+            fftMagnitudes[axis]?.removeAll()
+        }
+        fftFrequencies.removeAll()
+        lastProcessedSampleTimestamp = 0
+        await resetRMSValuesAndAttitude()
     }
-    
-    // captureNewSamples is @MainActor. Direct use of self is fine here.
-    // No internal closures that would lose self context.
+
     @MainActor
-    func captureNewSamples() {
-        guard self.measurementState == .recording || (self.measurementState == .completed && self.dataFetchTimer == nil && !self.isRecording) else { return }
-        let aRD = self.recorder.getRecordedData(); let nS = aRD.filter { $0.timestamp > self.lastProcessedSampleTimestamp }; guard !nS.isEmpty else { return }
-        var cMAY = abs(self.axisRanges.maxY)
-        for s in nS {
-            self.timeSeriesData[Axis.x]?.append(.init(timestamp:s.timestamp,value:s.x))
-            self.timeSeriesData[Axis.y]?.append(.init(timestamp:s.timestamp,value:s.y))
-            self.timeSeriesData[Axis.z]?.append(.init(timestamp:s.timestamp,value:s.z))
-            cMAY = max(cMAY,abs(s.x),abs(s.y),abs(s.z))
-            self.latestX=s.x; self.latestY=s.y; self.latestZ=s.z
+    private func captureNewSamples() {
+        guard measurementState == .recording ||
+              (measurementState == .completed && dataFetchTimer == nil && !isRecording)
+        else { return }
+
+        let allRecordedData = recorder.getRecordedData()
+        let newSamples = allRecordedData.filter { $0.timestamp > self.lastProcessedSampleTimestamp }
+        guard !newSamples.isEmpty else { return }
+
+        var currentMaxAbsY = abs(axisRanges.maxY)
+        for sample in newSamples {
+            timeSeriesData[Axis.x]?.append(DataPoint(timestamp: sample.timestamp, value: sample.x))
+            timeSeriesData[Axis.y]?.append(DataPoint(timestamp: sample.timestamp, value: sample.y))
+            timeSeriesData[Axis.z]?.append(DataPoint(timestamp: sample.timestamp, value: sample.z))
+            currentMaxAbsY = max(currentMaxAbsY, abs(sample.x), abs(sample.y), abs(sample.z))
+            self.latestX = sample.x; self.latestY = sample.y; self.latestZ = sample.z
         }
-        if let lastTimestamp = nS.last?.timestamp {
-            self.lastProcessedSampleTimestamp = lastTimestamp
-        }
-        
-        if self.measurementState == .recording {
-            let newDynamicMaxY = (cMAY.isFinite && cMAY > 0.00001) ? cMAY : 1.0
-            self.axisRanges.minY = -newDynamicMaxY
-            self.axisRanges.maxY = newDynamicMaxY
+        if let lastTimestamp = newSamples.last?.timestamp { self.lastProcessedSampleTimestamp = lastTimestamp }
+
+        if measurementState == .recording {
+             let newDynamicMaxY = currentMaxAbsY.isFinite && currentMaxAbsY > 1e-5 ? currentMaxAbsY : 1.0
+             axisRanges.minY = -newDynamicMaxY; axisRanges.maxY = newDynamicMaxY
         }
     }
-    
+
     private func calculateOverallRMS(for axis: Axis) -> Double {
-        guard let dPs = self.timeSeriesData[axis], !dPs.isEmpty else { return 0.0 }
-        let v = dPs.map { $0.value }; let sOS = v.reduce(0.0) { $0 + ($1*$1) }; return sqrt(sOS/Double(v.count))
+        guard let dataPoints = timeSeriesData[axis], !dataPoints.isEmpty else { return 0.0 }
+        let values = dataPoints.map { $0.value }
+        let sumOfSquares = values.reduce(0.0) { $0 + ($1 * $1) }
+        return sqrt(sumOfSquares / Double(values.count))
     }
-    
+
     private func calculateActualAverageRate() {
         guard let xDataPoints = self.timeSeriesData[Axis.x], xDataPoints.count > 1,
               let firstTimestamp = xDataPoints.first?.timestamp,
@@ -386,96 +432,75 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         let rate = (numberOfActualSamples - 1.0) / actualRecordingDuration
         self.calculatedActualAverageSamplingRateForFFT = (rate > 0 && rate.isFinite) ? rate : Double(self.actualCoreMotionRequestRate)
     }
-    
+
     @MainActor
-    func computeFFT() {
-        guard self.collectedSamplesCount > 0, let rateForFFT = self.calculatedActualAverageSamplingRateForFFT else { self.isFFTReady = false; return }
-        self.isFFTReady = false
-        let xV = (self.timeSeriesData[Axis.x] ?? []).map { $0.value }
-        let yV = (self.timeSeriesData[Axis.y] ?? []).map { $0.value }
-        let zV = (self.timeSeriesData[Axis.z] ?? []).map { $0.value }
-        let analyzer = self.fftAnalyzer 
-        Task.detached(priority: .userInitiated) { [weak self, analyzer] in
+    func computeFFT() async { // Marked async
+        guard collectedSamplesCount > 0, let rateForFFT = self.calculatedActualAverageSamplingRateForFFT else {isFFTReady = false; return}
+        isFFTReady = false
+        let xV = (timeSeriesData[Axis.x] ?? []).map{$0.value}
+        let yV = (timeSeriesData[Axis.y] ?? []).map{$0.value}
+        let zV = (timeSeriesData[Axis.z] ?? []).map{$0.value}
+        let analyzer = self.fftAnalyzer
+
+        await Task.detached(priority: .userInitiated) { [weak self, analyzer, xV, yV, zV, rateForFFT] in
             guard let strongSelf = self else { return }
             let rX = analyzer.performFFT(input:xV, samplingRate:rateForFFT)
             let rY = analyzer.performFFT(input:yV, samplingRate:rateForFFT)
             let rZ = analyzer.performFFT(input:zV, samplingRate:rateForFFT)
-            // This await MainActor.run block will use the strongSelf captured by Task.detached
             await MainActor.run {
-                strongSelf.fftFrequencies = rX.frequencies
-                strongSelf.fftMagnitudes[Axis.x] = rX.magnitude
-                strongSelf.fftMagnitudes[Axis.y] = rY.magnitude
-                strongSelf.fftMagnitudes[Axis.z] = rZ.magnitude
+                strongSelf.fftFrequencies=rX.frequencies
+                strongSelf.fftMagnitudes[Axis.x]=rX.magnitude
+                strongSelf.fftMagnitudes[Axis.y]=rY.magnitude
+                strongSelf.fftMagnitudes[Axis.z]=rZ.magnitude
                 strongSelf.isFFTReady = true
             }
-        }
+        }.value
     }
 
     @MainActor func toggleAxisVisibility(_ axis: Axis) {
-        if self.activeAxes.contains(axis){ if self.activeAxes.count > 1{self.activeAxes.remove(axis)}} else{self.activeAxes.insert(axis)}
+        if activeAxes.contains(axis){ if activeAxes.count > 1{activeAxes.remove(axis)}} else{activeAxes.insert(axis)}
     }
-    
-    @MainActor
-    func exportCSV() {
-        guard self.collectedSamplesCount > 0 else {
-            print("AccelerationViewModel: No data to export.")
-            // Optionally, inform the user via UI
-            return
-        }
 
-        let csvHeader = "Timestamp,X,Y,Z\n"
-        var csvString = csvHeader
+    func exportCSV() { // Not marked @MainActor, but calls presentShareSheet which needs main actor
+        guard collectedSamplesCount > 0 else { print("No data to export."); return }
+        var csvString = "Timestamp,X,Y,Z\n" // Corrected newline
+        let nf = NumberFormatter(); nf.minimumFractionDigits = 4; nf.maximumFractionDigits = 8; nf.decimalSeparator = "."; nf.numberStyle = .decimal
         
-        let numberFormatter = NumberFormatter()
-        numberFormatter.minimumFractionDigits = 4
-        numberFormatter.maximumFractionDigits = 8
-        numberFormatter.decimalSeparator = "."
-        numberFormatter.numberStyle = .decimal
-
-        // Ensure explicit type annotation for DataPoint arrays
-        let xSamples: [DataPoint] = self.timeSeriesData[Axis.x] ?? []
-        let ySamples: [DataPoint] = self.timeSeriesData[Axis.y] ?? []
-        let zSamples: [DataPoint] = self.timeSeriesData[Axis.z] ?? []
-        let rowCount = [xSamples.count, ySamples.count, zSamples.count].min() ?? 0
+        // This data access should ideally be on the MainActor if timeSeriesData can be modified concurrently.
+        // However, since it's an ObservableObject, changes usually come from @MainActor already.
+        // For safety in a non-@MainActor func, one might wrap this data access.
+        // But given the context, assume it's called from a UI context that's already main.
+        let xData = timeSeriesData[Axis.x] ?? []
+        let yData = timeSeriesData[Axis.y] ?? []
+        let zData = timeSeriesData[Axis.z] ?? []
+        let rowCount = [xData.count, yData.count, zData.count].min() ?? 0
         
         for i in 0..<rowCount {
-            // Accessing .timestamp and .value should now be safe with explicit typing above.
-            let ts = xSamples[i].timestamp
-            let xVal = xSamples[i].value
-            let yVal = ySamples[i].value
-            let zVal = zSamples[i].value
+            let ts = xData[i].timestamp
+            let xVal = xData[i].value
+            let yVal = yData[i].value
+            let zVal = zData[i].value
             
-            let xStr = numberFormatter.string(from: NSNumber(value: xVal)) ?? "\(xVal)"
-            let yStr = numberFormatter.string(from: NSNumber(value: yVal)) ?? "\(yVal)"
-            let zStr = numberFormatter.string(from: NSNumber(value: zVal)) ?? "\(zVal)"
+            let xStr = nf.string(from: NSNumber(value: xVal)) ?? "\(xVal)"
+            let yStr = nf.string(from: NSNumber(value: yVal)) ?? "\(yVal)"
+            let zStr = nf.string(from: NSNumber(value: zVal)) ?? "\(zVal)"
             
-            csvString += "\(String(format: "%.4f", ts)),\(xStr),\(yStr),\(zStr)\n"
+            csvString += "\(String(format: "%.4f", ts)),\(xStr),\(yStr),\(zStr)\n" // Corrected newline
         }
-        
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
-        let fileName = "DynaVibe_RawData_\(dateFormatter.string(from: Date())).csv"
-        
-        guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            print("AccelerationViewModel: Failed to access documents directory.")
-            // Optionally, inform the user via UI
-            return
-        }
-        
-        let fileURL = documentsDirectory.appendingPathComponent(fileName)
-        
+        let df = DateFormatter(); df.dateFormat="yyyyMMdd_HHmmss"; let fn="DynaVibe_RawData_\(df.string(from: Date())).csv"
+        guard let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { print("No docs dir."); return }
+        let fileURL = docsDir.appendingPathComponent(fn)
         do {
             try csvString.write(to: fileURL, atomically: true, encoding: .utf8)
-            print("AccelerationViewModel: CSV successfully saved to \(fileURL.path)")
-            self.presentShareSheet(for: fileURL)
-        } catch {
-            print("AccelerationViewModel: CSV write failed - \(error.localizedDescription)")
-            // Optionally, inform the user via UI about the failure
+            Task { @MainActor [weak self] in // Ensure presentShareSheet is called on MainActor
+                guard let strongSelf = self else { return }
+                strongSelf.presentShareSheet(for: fileURL)
+            }
         }
+        catch { print("CSV write failed: \(error.localizedDescription)") }
     }
 
-    @MainActor
-    private func presentShareSheet(for url: URL) {
+    private func presentShareSheet(for url: URL) { // Not marked @MainActor, but uses DispatchQueue.main.async
         DispatchQueue.main.async {
             guard let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
                   let rootVC = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController else { return }
@@ -486,4 +511,4 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
             rootVC.present(activityVC, animated: true)
         }
     }
-
+}
