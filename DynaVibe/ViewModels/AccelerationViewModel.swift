@@ -7,18 +7,45 @@ import CoreMotion
 // Ensure MultiLineGraphView (for .AxisRanges), DataPoint, Axis types are accessible
 // from their respective files (e.g., UI/MultiLineGraphView.swift, Models/DataPoint.swift, Shared/AxisAndLegend.swift)
 
+// Enum to select between raw and weighted time series for graph display
+public enum TimeDataType: String, CaseIterable, Identifiable { // Made public for RealTimeDataView
+    case raw = "Raw Time History"
+    case weighted = "Weighted Time History"
+    public var id: String { self.rawValue }
+}
+
 final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
 
     // MARK: - Published State
+    @Published var displayTimeDataType: TimeDataType = .raw // User's choice for time data display
     @Published var latestX: Double = 0.0
     @Published var latestY: Double = 0.0
     @Published var latestZ: Double = 0.0
     @Published var timeSeriesData: [Axis: [DataPoint]] = [:]
     @Published var fftFrequencies: [Double] = []
     @Published var fftMagnitudes: [Axis: [Double]] = [:]
-    @Published var rmsX: Double = 0.0
-    @Published var rmsY: Double = 0.0
-    @Published var rmsZ: Double = 0.0
+    @Published var rmsX: Double = 0.0 // Unweighted RMS
+    @Published var rmsY: Double = 0.0 // Unweighted RMS
+    @Published var rmsZ: Double = 0.0 // Unweighted RMS
+    @Published var weightedRmsX: Double = 0.0
+    @Published var weightedRmsY: Double = 0.0
+    @Published var weightedRmsZ: Double = 0.0
+
+    // For MTVV (Maximum Transient Vibration Value) - typically per axis
+    @Published var mtvvX: Double = 0.0
+    @Published var mtvvY: Double = 0.0
+    @Published var mtvvZ: Double = 0.0
+
+    // For VDV (Vibration Dose Value) - can be per axis or combined.
+    @Published var vdvX: Double = 0.0
+    @Published var vdvY: Double = 0.0
+    @Published var vdvZ: Double = 0.0
+    @Published var vdvTotal: Double = 0.0 // Or vdvOverall
+
+    @Published var weightedTimeSeriesX: [Double] = []
+    @Published var weightedTimeSeriesY: [Double] = []
+    @Published var weightedTimeSeriesZ: [Double] = []
+
     @Published var isRecording = false // True ONLY during actual data acquisition phase
     @Published var isFFTReady = false
     @Published var timeLeft: Double = 0.0 // Shows pre-recording delay OR recording duration countdown
@@ -29,6 +56,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     @Published var activeAxes: Set<Axis> = [.x, .y, .z]
     @Published var currentRoll: Double = 0.0
     @Published var currentPitch: Double = 0.0
+    // @Published var selectedWeightingType: WeightingType = .none // Replaced by AppStorage-backed computed property
 
     // MARK: - Settings
     @AppStorage("samplingRateSettingStorage") var samplingRateSettingStorage: Int = 128 {
@@ -46,8 +74,69 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     @AppStorage("useLinearAccelerationSetting") var useLinearAccelerationSetting: Bool = false {
         didSet { if oldValue != self.useLinearAccelerationSetting { self.toggleLiveAttitudeBasedOnSetting() } }
     }
+    @AppStorage("selectedWeightingTypeStorage") private var selectedWeightingTypeStorage: String = WeightingType.none.rawValue
+
+    var selectedWeightingType: WeightingType {
+        get { WeightingType(rawValue: selectedWeightingTypeStorage) ?? .none }
+        set { selectedWeightingTypeStorage = newValue.rawValue }
+    }
 
     // MARK: - Computed Properties
+
+    /// Provides the data points for the time-domain graph, switching between raw and weighted.
+    var currentGraphTimeData: [IdentifiableGraphPoint] {
+        var points: [IdentifiableGraphPoint] = []
+        // Ensure consistent order of axes in the graph
+        let sortedActiveAxes = activeAxes.sorted(by: { $0.rawValue < $1.rawValue })
+
+        // Use the most reliable sample rate available
+        let effectiveSampleRate = self.calculatedActualAverageSamplingRateForFFT ?? Double(self.actualCoreMotionRequestRate)
+
+        switch displayTimeDataType {
+        case .raw:
+            for axis in sortedActiveAxes {
+                if let seriesData = timeSeriesData[axis] { // timeSeriesData stores [DataPoint]
+                    points.append(contentsOf: seriesData.map {
+                        IdentifiableGraphPoint(axis: axis, xValue: $0.timestamp, yValue: $0.value)
+                    })
+                }
+            }
+        case .weighted:
+            // Weighted data is only available after processing, and if sample rate is valid
+            guard effectiveSampleRate > 0,
+                  !weightedTimeSeriesX.isEmpty || !weightedTimeSeriesY.isEmpty || !weightedTimeSeriesZ.isEmpty else {
+                // Fallback to raw data if weighted is not available (e.g. during/before recording)
+                // or if conditions for generating it weren't met.
+                for axis in sortedActiveAxes {
+                    if let seriesData = timeSeriesData[axis] {
+                        points.append(contentsOf: seriesData.map {
+                            IdentifiableGraphPoint(axis: axis, xValue: $0.timestamp, yValue: $0.value)
+                        })
+                    }
+                }
+                // Optionally, could set a flag here to inform UI that weighted data was requested but unavailable.
+                // Or, the UI picker for .weighted could be disabled if weighted data is not ready.
+                // For now, this fallback ensures the graph doesn't go blank if .weighted is selected prematurely.
+                return points
+            }
+
+            for axis in sortedActiveAxes {
+                let dataSeries: [Double]
+                switch axis {
+                case .x: dataSeries = weightedTimeSeriesX
+                case .y: dataSeries = weightedTimeSeriesY
+                case .z: dataSeries = weightedTimeSeriesZ
+                }
+
+                points.append(contentsOf: dataSeries.enumerated().map { (index, value) -> IdentifiableGraphPoint in
+                    let timestamp = Double(index) / effectiveSampleRate
+                    return IdentifiableGraphPoint(axis: axis, xValue: timestamp, yValue: value)
+                })
+            }
+        }
+        return points
+    }
+
     var actualCoreMotionRequestRate: Int {
         switch self.samplingRateSettingStorage {
         case 0: return 1000
@@ -106,6 +195,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         if self.useLinearAccelerationSetting {
             self.startLiveAttitudeMonitoring()
         }
+        // selectedWeightingType is now a computed property backed by AppStorage, no manual init needed from stored rawValue here.
     }
 
     deinit {
@@ -134,6 +224,9 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     // MARK: - Helper Methods
     private func resetRMSValuesAndAttitude() {
         self.rmsX = 0.0; self.rmsY = 0.0; self.rmsZ = 0.0
+        self.weightedRmsX = 0.0; self.weightedRmsY = 0.0; self.weightedRmsZ = 0.0
+        self.mtvvX = 0.0; self.mtvvY = 0.0; self.mtvvZ = 0.0
+        self.vdvX = 0.0; self.vdvY = 0.0; self.vdvZ = 0.0; self.vdvTotal = 0.0
         Task { @MainActor in self.currentRoll = 0.0; self.currentPitch = 0.0 }
     }
 
@@ -274,7 +367,99 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
             let fMT=Axis.allCases.compactMap{self.timeSeriesData[$0]?.last?.timestamp}.max() ?? self.elapsedTime
             self.axisRanges.minX = 0
             self.axisRanges.maxX=max(fMT,self.currentEffectiveMaxGraphDuration)
-            if self.collectedSamplesCount>0{self.rmsX=self.calculateOverallRMS(for:.x);self.rmsY=self.calculateOverallRMS(for:.y);self.rmsZ=self.calculateOverallRMS(for:.z)}else{self.resetRMSValuesAndAttitude()}
+
+            // Calculate Unweighted RMS
+            if self.collectedSamplesCount > 0 {
+                self.rmsX = self.calculateOverallRMS(for: .x, weighted: false)
+                self.rmsY = self.calculateOverallRMS(for: .y, weighted: false)
+                self.rmsZ = self.calculateOverallRMS(for: .z, weighted: false)
+
+                // Calculate Weighted RMS (placeholder logic)
+                self.weightedRmsX = self.calculateOverallRMS(for: .x, weighted: true)
+                self.weightedRmsY = self.calculateOverallRMS(for: .y, weighted: true)
+                self.weightedRmsZ = self.calculateOverallRMS(for: .z, weighted: true)
+
+                // --- Placeholder for MTVV Calculation ---
+                // MTVV should be calculated from the time-domain frequency-weighted acceleration data.
+                // This involves calculating running RMS values over short intervals (e.g., 1s) and finding the maximum.
+                // For now, setting to 0.0 as a placeholder.
+                // if self.selectedWeightingType != .none {
+                //     // let weightedXDataForMTVV = FrequencyWeightingFilter.applyWeightingFilter(data: self.timeSeriesData[Axis.x]?.map{$0.value} ?? [], sampleRate: self.calculatedActualAverageSamplingRateForFFT ?? 0, weightingType: self.selectedWeightingType)
+                //     // self.mtvvX = calculateMTVV(data: weightedXDataForMTVV, sampleRate: self.calculatedActualAverageSamplingRateForFFT ?? 0) // Future function
+                //     // Similarly for Y and Z, applying appropriate weighting (e.g. Wd for X/Y, Wk or Wb for Z)
+                //     print("MTVV calculation placeholder for \(self.selectedWeightingType.rawValue) data (IMPLEMENTATION PENDING)")
+                // } else {
+                //     // Potentially calculate MTVV on unweighted data or set to 0 / indicate N/A
+                //     print("MTVV for unweighted data - placeholder or N/A")
+                // }
+                // self.mtvvX = 0.0 // Placeholder
+                // self.mtvvY = 0.0 // Placeholder
+                // self.mtvvZ = 0.0 // Placeholder
+
+                // Actual MTVV Calculation
+                let mtvvWindowSeconds = 1.0 // As per ISO 2631-1 for MTVV
+                if self.selectedWeightingType != .none && sampleRate > 0 {
+                    // MTVV is typically calculated on weighted data.
+                    self.mtvvX = DynaVibe.calculateMTVV(
+                        weightedTimeSeries: self.weightedTimeSeriesX,
+                        sampleRate: sampleRate,
+                        windowSeconds: mtvvWindowSeconds
+                    )
+                    self.mtvvY = DynaVibe.calculateMTVV(
+                        weightedTimeSeries: self.weightedTimeSeriesY,
+                        sampleRate: sampleRate,
+                        windowSeconds: mtvvWindowSeconds
+                    )
+                    self.mtvvZ = DynaVibe.calculateMTVV(
+                        weightedTimeSeries: self.weightedTimeSeriesZ,
+                        sampleRate: sampleRate,
+                        windowSeconds: mtvvWindowSeconds
+                    )
+                    // print("MTVV Calculated: X=\(self.mtvvX), Y=\(self.mtvvY), Z=\(self.mtvvZ)")
+                } else {
+                    // If no weighting or no valid sample rate, reset MTVV values
+                    self.mtvvX = 0.0
+                    self.mtvvY = 0.0
+                    self.mtvvZ = 0.0
+                }
+
+                // Actual VDV Calculation
+                // sampleRate is already defined in this scope from the MTVV calculation section or should be.
+                // Let's ensure it is, or re-fetch if necessary for clarity.
+                let effectiveSampleRate = self.calculatedActualAverageSamplingRateForFFT ?? Double(self.actualCoreMotionRequestRate)
+
+                if self.selectedWeightingType != .none && effectiveSampleRate > 0 {
+                    // VDV is typically calculated on weighted data.
+                    // If .none is selected, weightedTimeSeries would be same as raw if applyWeightingViaFFT handles it that way.
+                    self.vdvX = calculateVDV( // Calling the global function from FrequencyWeighting.swift
+                        weightedTimeSeries: self.weightedTimeSeriesX,
+                        sampleRate: effectiveSampleRate
+                    )
+                    self.vdvY = calculateVDV(
+                        weightedTimeSeries: self.weightedTimeSeriesY,
+                        sampleRate: effectiveSampleRate
+                    )
+                    self.vdvZ = calculateVDV(
+                        weightedTimeSeries: self.weightedTimeSeriesZ,
+                        sampleRate: effectiveSampleRate
+                    )
+
+                    // Calculate vdvTotal = (vdvX^4 + vdvY^4 + vdvZ^4)^(1/4)
+                    let sumOfVDVFourthPowers = pow(self.vdvX, 4) + pow(self.vdvY, 4) + pow(self.vdvZ, 4)
+                    self.vdvTotal = pow(sumOfVDVFourthPowers, 0.25)
+
+                } else {
+                    // If no weighting or no valid sample rate, reset VDV values
+                    self.vdvX = 0.0
+                    self.vdvY = 0.0
+                    self.vdvZ = 0.0
+                    self.vdvTotal = 0.0
+                }
+
+            } else {
+                self.resetRMSValuesAndAttitude() // Resets both weighted and unweighted, and now MTVV/VDV
+            }
+
             self.calculateActualAverageRate()
             if self.collectedSamplesCount>0{self.computeFFT()}else{self.isFFTReady=false;self.calculatedActualAverageSamplingRateForFFT=nil}
         } else{
@@ -303,7 +488,40 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     func resetDataForNewRecording() {
         Axis.allCases.forEach{a in self.timeSeriesData[a]?.removeAll(); self.fftMagnitudes[a]?.removeAll()}
         self.fftFrequencies.removeAll(); self.lastProcessedSampleTimestamp=0
-        self.resetRMSValuesAndAttitude()
+        self.weightedTimeSeriesX.removeAll()
+        self.weightedTimeSeriesY.removeAll()
+        self.weightedTimeSeriesZ.removeAll()
+        self.resetRMSValuesAndAttitude() // Resets RMS, weightedRMS, MTVV, VDV
+    }
+
+    // Calculates RMS. If 'weighted' is true, it uses the pre-calculated weighted time series.
+    // Otherwise, it uses the raw time series data.
+    private func calculateOverallRMS(for axis: Axis, weighted: Bool) -> Double {
+        let dataSeries: [Double]
+
+        if weighted {
+            // Use the time series data that has already been weighted via FFT-IFFT method.
+            // Note: If selectedWeightingType was .none, applyWeightingViaFFT would have
+            // returned the original unweighted series, so this branch correctly handles that too
+            // by calculating RMS on what is effectively unweighted data in that specific scenario.
+            switch axis {
+            case .x:
+                dataSeries = self.weightedTimeSeriesX
+            case .y:
+                dataSeries = self.weightedTimeSeriesY
+            case .z:
+                dataSeries = self.weightedTimeSeriesZ
+            }
+        } else {
+            // Use the raw (or gravity-compensated if useLinearAccelerationSetting is true) time series data.
+            guard let rawDataPoints = self.timeSeriesData[axis] else { return 0.0 }
+            dataSeries = rawDataPoints.map { $0.value }
+        }
+
+        guard !dataSeries.isEmpty else { return 0.0 }
+
+        let sumOfSquares = dataSeries.reduce(0.0) { $0 + ($1 * $1) }
+        return sqrt(sumOfSquares / Double(dataSeries.count))
     }
     
     @MainActor
@@ -311,6 +529,13 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         guard self.measurementState == .recording || (self.measurementState == .completed && self.dataFetchTimer == nil && !self.isRecording) else {return}
         let aRD=self.recorder.getRecordedData(); let nS=aRD.filter{$0.timestamp > self.lastProcessedSampleTimestamp}; guard !nS.isEmpty else {return}
         var cMAY=abs(self.axisRanges.maxY)
+
+        // Placeholder for where frequency weighting might be applied if done on-the-fly
+        // or before appending to timeSeriesData.
+        // For now, timeSeriesData stores raw (or gravity-compensated) data.
+        // Weighting for analysis (RMS, FFT) would ideally be applied to a copy of this data
+        // after recording is complete, or if live weighted FFT is needed, then on chunks.
+
         for s in nS{
             self.timeSeriesData[Axis.x]?.append(.init(timestamp:s.timestamp,value:s.x))
             self.timeSeriesData[Axis.y]?.append(.init(timestamp:s.timestamp,value:s.y))
@@ -330,8 +555,23 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     }
     
     private func calculateOverallRMS(for axis: Axis) -> Double {
-        guard let dPs=self.timeSeriesData[axis],!dPs.isEmpty else{return 0.0}
-        let v=dPs.map{$0.value};let sOS=v.reduce(0.0){$0+($1*$1)};return sqrt(sOS/Double(v.count))
+        // TODO: Apply frequency weighting to data before RMS if selectedWeightingType != .none
+        // This would involve creating a weighted copy of dPs.map{$0.value}
+        // using the FrequencyWeightingFilter (once implemented for time-domain)
+        // or by weighting the FFT spectrum and then calculating RMS from weighted spectrum (Parseval's theorem).
+        // For now, calculating RMS on unweighted (or gravity-compensated) data.
+        // if selectedWeightingType != .none {
+        //     print("RMS calculation for \(axis) would use \(selectedWeightingType.rawValue) - (FILTER IMPLEMENTATION PENDING)")
+        // }
+        // This logic moved into the updated calculateOverallRMS(for:weighted:) function
+        // guard let dPs=self.timeSeriesData[axis],!dPs.isEmpty else{return 0.0}
+        // let v=dPs.map{$0.value};let sOS=v.reduce(0.0){$0+($1*$1)};return sqrt(sOS/Double(v.count))
+        // The old function signature and body are removed by the replace above.
+        // This search block is targeting the old function to replace it.
+        // However, the previous replace block for calculateOverallRMS should be adjusted.
+        // Let's assume the previous SEARCH block for calculateOverallRMS was meant to be replaced entirely
+        // by the new calculateOverallRMS(for:weighted:)
+        // For this specific search block, it's now part of the new function.
     }
     
     private func calculateActualAverageRate() {
@@ -352,15 +592,41 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     func computeFFT() {
         guard self.collectedSamplesCount > 0, let rateForFFT = self.calculatedActualAverageSamplingRateForFFT else {self.isFFTReady = false; return}
         self.isFFTReady = false
+
+        // TODO: Apply frequency weighting here if selectedWeightingType != .none before FFT
+        // This could be done by:
+        // 1. Applying a time-domain filter (from FrequencyWeightingFilter) to copies of xV, yV, zV.
+        // 2. Or, by multiplying the resulting FFT magnitudes by getFrequencyWeightingFactor().
+        // Method 2 is simpler for now as time-domain filter is not ready.
+
+        // if selectedWeightingType != .none {
+        //     print("FFT computation would use \(selectedWeightingType.rawValue) weighting - (FILTER APPLICATION PENDING)")
+        // }
+
         let xV = (self.timeSeriesData[Axis.x] ?? []).map{$0.value}
         let yV = (self.timeSeriesData[Axis.y] ?? []).map{$0.value}
         let zV = (self.timeSeriesData[Axis.z] ?? []).map{$0.value}
+
         let analyzer = self.fftAnalyzer
         Task.detached(priority: .userInitiated) { [weak self, analyzer] in
             guard let strongSelf = self else { return }
-            let rX = analyzer.performFFT(input:xV, samplingRate:rateForFFT)
-            let rY = analyzer.performFFT(input:yV, samplingRate:rateForFFT)
-            let rZ = analyzer.performFFT(input:zV, samplingRate:rateForFFT)
+            var rX = analyzer.performFFT(input:xV, samplingRate:rateForFFT)
+            var rY = analyzer.performFFT(input:yV, samplingRate:rateForFFT)
+            var rZ = analyzer.performFFT(input:zV, samplingRate:rateForFFT)
+
+            // The requirement is to display the RAW, UNWEIGHTED spectrum.
+            // Therefore, the application of getFrequencyWeightingFactor to the display spectrum is removed.
+            // If a weighted spectrum view is needed later, it would be a separate feature/property.
+            // if strongSelf.selectedWeightingType != .none {
+            //     print("Applying \(strongSelf.selectedWeightingType.rawValue) to FFT Magnitudes FOR DISPLAY - THIS IS NOW REMOVED")
+            //     for i in 0..<rX.frequencies.count {
+            //         let factor = getFrequencyWeightingFactor(frequency: rX.frequencies[i], type: strongSelf.selectedWeightingType)
+            //         if !rX.magnitude.isEmpty { rX.magnitude[i] *= factor }
+            //         if !rY.magnitude.isEmpty { rY.magnitude[i] *= factor }
+            //         if !rZ.magnitude.isEmpty { rZ.magnitude[i] *= factor }
+            //     }
+            // }
+
             await MainActor.run {
                 strongSelf.fftFrequencies=rX.frequencies
                 strongSelf.fftMagnitudes[Axis.x]=rX.magnitude

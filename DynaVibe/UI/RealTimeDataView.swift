@@ -3,36 +3,98 @@ import SwiftUI
 
 struct RealTimeDataView: View {
     @StateObject private var vm = AccelerationViewModel()
-    private enum DisplayMode: Hashable { case time, frequency }
-    @State private var currentDisplayMode: DisplayMode = .time
+    // Renaming DisplayMode to GraphDomainType for clarity with new TimeDataType
+    private enum GraphDomainType: String, CaseIterable, Identifiable {
+        case time = "Time Domain"
+        case frequency = "Frequency Domain"
+        var id: String { self.rawValue }
+    }
+    @State private var currentGraphDomain: GraphDomainType = .time
     private let axisColors: [Axis: Color] = [.x: .red, .y: .green, .z: .blue]
 
     private var graphPlotData: [IdentifiableGraphPoint] {
-        var points: [IdentifiableGraphPoint] = []
-        let sortedActiveAxes = vm.activeAxes.sorted(by: { $0.rawValue < $1.rawValue })
-        if currentDisplayMode == .time {
-            for axisCase in sortedActiveAxes {
-                if let seriesData = vm.timeSeriesData[axisCase] {
-                    for dataPoint in seriesData { points.append(IdentifiableGraphPoint(axis: axisCase, xValue: dataPoint.timestamp, yValue: dataPoint.value)) }
-                }
-            }
-        } else {
+        if currentGraphDomain == .time {
+            return vm.currentGraphTimeData // Use the new computed property from ViewModel
+        } else { // Frequency domain
+            var points: [IdentifiableGraphPoint] = []
             guard vm.isFFTReady, !vm.fftFrequencies.isEmpty else { return [] }
+            let sortedActiveAxes = vm.activeAxes.sorted(by: { $0.rawValue < $1.rawValue })
             for axisCase in sortedActiveAxes {
                 if let magnitudes = vm.fftMagnitudes[axisCase], magnitudes.count == vm.fftFrequencies.count {
-                    for i in 0..<vm.fftFrequencies.count { points.append(IdentifiableGraphPoint(axis: axisCase, xValue: vm.fftFrequencies[i], yValue: magnitudes[i])) }
+                    for i in 0..<vm.fftFrequencies.count {
+                        points.append(IdentifiableGraphPoint(axis: axisCase, xValue: vm.fftFrequencies[i], yValue: magnitudes[i]))
+                    }
                 }
             }
+            return points
         }
-        return points
     }
     
     private var currentGraphRanges: MultiLineGraphView.AxisRanges {
-        if currentDisplayMode == .time {
-            return vm.measurementState == .idle ?
-                   MultiLineGraphView.AxisRanges(minY: -1, maxY: 1, minX: 0, maxX: vm.currentEffectiveMaxGraphDuration) :
-                   vm.axisRanges
-        } else {
+        if currentGraphDomain == .time { // Use new GraphDomainType
+            // Adjust X-axis range based on whether weighted data (which starts at t=0) or raw data (original timestamps) is shown
+            var minXRange: Double = 0
+            var maxXRange: Double = vm.currentEffectiveMaxGraphDuration
+
+            if vm.displayTimeDataType == .raw, let firstTimestamp = vm.timeSeriesData.values.compactMap({ $0.first?.timestamp }).min() {
+                 // For raw data, if not empty, minX might not be 0 if data is from a continued recording (not handled yet)
+                 // or if timestamps are not relative to 0. For now, assume raw data timestamps start near 0 for simplicity.
+                 // If using absolute timestamps, this would need adjustment.
+                 // The current vm.axisRanges is probably better for raw data during/after recording.
+            }
+
+            if vm.measurementState == .recording && vm.displayTimeDataType == .weighted {
+                // If live weighted view was possible and timestamps were relative to start of current segment
+                maxXRange = vm.elapsedTime + 0.2 // Show a bit ahead
+                if !vm.autoStopRecordingEnabled || vm.measurementDurationSetting <= 0 { // Manual stop or continuous
+                     minXRange = max(0, vm.elapsedTime - 10.0) // 10s window
+                }
+            } else if vm.measurementState == .idle && vm.displayTimeDataType == .raw {
+                 minXRange = 0
+                 maxXRange = vm.currentEffectiveMaxGraphDuration
+            } else if vm.measurementState == .idle && vm.displayTimeDataType == .weighted {
+                // Show full potential duration for weighted if idle, assuming it might be populated from a previous run
+                 minXRange = 0
+                 // maxXRange could be based on the longest weighted series length / sampleRate if available
+                 // For now, stick to currentEffectiveMaxGraphDuration or a default
+                 let weightedDuration = Double(vm.weightedTimeSeriesX.count) / (vm.calculatedActualAverageSamplingRateForFFT ?? Double(vm.actualCoreMotionRequestRate))
+                 maxXRange = (weightedDuration > 0) ? max(weightedDuration, 1.0) : vm.currentEffectiveMaxGraphDuration
+            }
+            else if vm.measurementState == .completed && vm.displayTimeDataType == .weighted {
+                let weightedDuration = Double(vm.weightedTimeSeriesX.count) / (vm.calculatedActualAverageSamplingRateForFFT ?? Double(vm.actualCoreMotionRequestRate))
+                minXRange = 0
+                maxXRange = (weightedDuration > 0) ? max(weightedDuration, 1.0) : vm.currentEffectiveMaxGraphDuration
+            }
+
+
+            // Use vm.axisRanges for dynamic Y scaling during raw recording, but allow overrides for weighted/idle
+            var finalMinY = vm.axisRanges.minY
+            var finalMaxY = vm.axisRanges.maxY
+            if vm.measurementState == .idle || vm.displayTimeDataType == .weighted {
+                 finalMinY = -1.0 // Default for weighted or idle raw
+                 finalMaxY = 1.0  // Default for weighted or idle raw
+                if vm.displayTimeDataType == .weighted {
+                    let allWeightedValues = (vm.weightedTimeSeriesX + vm.weightedTimeSeriesY + vm.weightedTimeSeriesZ).filter { $0.isFinite }
+                    if let maxAbs = allWeightedValues.map(abs).max(), maxAbs > 0 {
+                        finalMinY = -maxAbs
+                        finalMaxY = maxAbs
+                    } else if allWeightedValues.isEmpty && vm.measurementState == .completed { // No weighted data, but completed
+                        finalMinY = -0.1; finalMaxY = 0.1 // Indicate no data effectively
+                    }
+                }
+            }
+             if vm.measurementState == .idle && vm.displayTimeDataType == .raw {
+                 minXRange = 0; maxXRange = vm.currentEffectiveMaxGraphDuration
+                 finalMinY = -1; finalMaxY = 1
+             }
+
+
+            return vm.measurementState == .recording && vm.displayTimeDataType == .raw ?
+                   vm.axisRanges : // Use dynamic ranges from ViewModel for live raw data
+                   MultiLineGraphView.AxisRanges(minY: finalMinY, maxY: finalMaxY, minX: minXRange, maxX: maxXRange)
+
+
+        } else { // Frequency Domain
             let relevantRate = vm.calculatedActualAverageSamplingRateForFFT ?? Double(vm.actualCoreMotionRequestRate)
             let firstFreq = vm.fftFrequencies.first ?? 0.0
             let lastFreqPossible = relevantRate / 2.0
@@ -76,11 +138,29 @@ struct RealTimeDataView: View {
                     rmsX: vm.measurementState == .completed ? vm.rmsX : nil,
                     rmsY: vm.measurementState == .completed ? vm.rmsY : nil,
                     rmsZ: vm.measurementState == .completed ? vm.rmsZ : nil
+                    // TODO: Add weighted RMS to MetricSummaryCard if desired
                 ).padding(.horizontal)
 
-                Picker("Display Mode", selection: $currentDisplayMode) {
-                    Text("Time Series").tag(DisplayMode.time); Text("Frequency").tag(DisplayMode.frequency)
-                }.pickerStyle(.segmented).padding(.horizontal)
+                Picker("Graph Domain", selection: $currentGraphDomain) {
+                    ForEach(GraphDomainType.allCases) { domain in
+                        Text(domain.rawValue).tag(domain)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+
+                if currentGraphDomain == .time {
+                    Picker("Time Data Type", selection: $vm.displayTimeDataType) {
+                        ForEach(AccelerationViewModel.TimeDataType.allCases) { type in
+                            Text(type.rawValue).tag(type)
+                        }
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .padding(.horizontal)
+                    // Disable if recording and weighted is selected, as weighted is post-processed
+                    .disabled(vm.isRecording && vm.displayTimeDataType == .weighted)
+                }
+
 
                 HStack {
                     HStack(spacing: 8) {
@@ -126,8 +206,9 @@ struct RealTimeDataView: View {
                 }.padding(.horizontal)
                 
                 MultiLineGraphView(plotData: graphPlotData, ranges: currentGraphRanges,
-                    isFrequencyDomain: currentDisplayMode == .frequency, axisColors: axisColors
-                ).id("\(currentDisplayMode)-\(vm.activeAxes.hashValue)-\(vm.measurementState.hashValue)-\(vm.isRecording)")
+                    isFrequencyDomain: currentGraphDomain == .frequency, axisColors: axisColors
+                ).id("\(currentGraphDomain)-\(vm.displayTimeDataType)-\(vm.activeAxes.hashValue)-\(vm.measurementState.hashValue)-\(vm.isRecording)")
+                // Added vm.displayTimeDataType to ID to force redraw on change
 
                 HStack(spacing: 20) {
                     Button { Haptics.tap()
@@ -153,14 +234,17 @@ struct RealTimeDataView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { Haptics.tap(); vm.exportCSV() }
                     label: { Image(systemName: "square.and.arrow.up") }
-                    .disabled(vm.isRecording || vm.measurementState == .preRecordingCountdown || (vm.collectedSamplesCount == 0 && vm.measurementState != .idle))
+                    // Disable export if live recording/countdown, or if no data (unless it's idle and has previous data)
+                    .disabled(vm.isRecording || vm.measurementState == .preRecordingCountdown || (vm.collectedSamplesCount == 0 && vm.measurementState != .idle && vm.measurementState != .completed) )
                 }
             }
-            .onChange(of: currentDisplayMode) { // Simpler onChange for newer Swift
-                if currentDisplayMode == .frequency && vm.measurementState == .completed && !vm.isFFTReady {
-                     vm.computeFFT()
+            .onChange(of: currentGraphDomain) { newDomain in
+                if newDomain == .frequency && vm.measurementState == .completed && !vm.isFFTReady {
+                     vm.computeFFT() // FFT computation might now use selectedWeightingType for spectrum weighting
                 }
             }
+            // Optional: onChange for vm.displayTimeDataType if any specific actions needed,
+            // but graphPlotData will react automatically.
             .onAppear {
                  if vm.measurementState == .idle {
                      vm.timeLeft = vm.currentInitialTimeLeft

@@ -2,8 +2,11 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("samplingRateSettingStorage") private var samplingRateSettingStorage: Int = 128
+    // Use StateObject for the ViewModel if this view is creating/owning it,
+    // or ObservedObject/EnvironmentObject if it's passed from a parent.
+    @StateObject private var viewModel = AccelerationViewModel()
     
+    // RateOption struct can remain as it's local to this View's Picker presentation logic
     struct RateOption: Hashable, Identifiable {
         let id: Int // The value stored in AppStorage (0 for Max)
         let label: String
@@ -16,12 +19,9 @@ struct SettingsView: View {
         RateOption(id: 0, label: "Max") // 0 represents "Max"
     ]
     
-    @AppStorage("measurementDurationSetting") private var measurementDuration: Double = 10.0
-    @AppStorage("recordingStartDelaySetting") private var recordingStartDelay: Double = 3.0
-    @AppStorage("autoStopRecordingEnabled") private var autoStopRecordingEnabled: Bool = true
-    
+    // Theme mode can remain local AppStorage or be moved to a separate AppearanceViewModel
     @AppStorage("themeMode") private var themeMode: Bool = false
-    @AppStorage("useLinearAccelerationSetting") private var useLinearAcceleration: Bool = false
+    // useLinearAccelerationSetting is already in AccelerationViewModel, so remove local @AppStorage for it.
 
     var body: some View {
         NavigationView {
@@ -31,7 +31,8 @@ struct SettingsView: View {
                         Text("Sampling Rate")
                         Spacer()
                     }
-                    Picker("Sampling Rate", selection: $samplingRateSettingStorage) {
+                    // Bind to viewModel's @AppStorage-backed property
+                    Picker("Sampling Rate", selection: $viewModel.samplingRateSettingStorage) {
                         ForEach(rateOptions) { option in
                             Text(option.label).tag(option.id)
                         }
@@ -39,22 +40,36 @@ struct SettingsView: View {
                     .pickerStyle(SegmentedPickerStyle())
 
                     Text("Recording Start Delay")
-                    Stepper(value: $recordingStartDelay, in: 0...30, step: 1) {
-                        Text("\(Int(recordingStartDelay)) seconds")
+                    Stepper(value: $viewModel.recordingStartDelaySetting, in: 0...30, step: 1) {
+                        Text("\(Int(viewModel.recordingStartDelaySetting)) seconds")
                     }
 
                     Text("Measurement Duration")
-                    Stepper(value: $measurementDuration, in: 1...600, step: 1) {
-                        Text(autoStopRecordingEnabled ? "\(Int(measurementDuration)) seconds" : "Continuous (Manual Stop)")
+                    Stepper(value: $viewModel.measurementDurationSetting, in: 1...600, step: 1) {
+                        Text(viewModel.autoStopRecordingEnabled ? "\(Int(viewModel.measurementDurationSetting)) seconds" : "Continuous (Manual Stop)")
                     }
-                    .disabled(!autoStopRecordingEnabled)
+                    .disabled(!viewModel.autoStopRecordingEnabled) // Use viewModel's property
 
-                    Toggle("Auto-Stop After Duration", isOn: $autoStopRecordingEnabled)
+                    Toggle("Auto-Stop After Duration", isOn: $viewModel.autoStopRecordingEnabled) // Use viewModel's property
                 }
                 
                 Section(header: Text("Analysis Settings")) {
-                    Toggle("Subtract Gravity (Linear Acceleration)", isOn: $useLinearAcceleration)
+                    // Bind to viewModel's @AppStorage-backed property
+                    Toggle("Subtract Gravity (Linear Acceleration)", isOn: $viewModel.useLinearAccelerationSetting)
                         .padding(.vertical, 4)
+
+                    // Bind Picker directly to viewModel.selectedWeightingType
+                    // The ViewModel's selectedWeightingType computed property handles AppStorage via selectedWeightingTypeStorage
+                    Picker("Frequency Weighting", selection: $viewModel.selectedWeightingType) {
+                        ForEach(WeightingType.allCases) { type in
+                            Text(type.rawValue).tag(type) // Tag with the enum case itself
+                        }
+                    }
+                    // No .onChange needed here as viewModel.selectedWeightingType's setter handles persistence.
+
+                    Text("Applies frequency weighting to FFT results. Time-domain filter implementation is pending standard coefficients for RMS etc.")
+                        .font(.caption)
+                        .foregroundColor(.gray)
                 }
                 
                 Section(header: Text("Appearance")) {
