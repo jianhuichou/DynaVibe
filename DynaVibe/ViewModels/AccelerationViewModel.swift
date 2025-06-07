@@ -250,7 +250,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
                 }
                 if s.autoStopRecordingEnabled && s.measurementDurationSetting > 0 && s.elapsedTime >= s.measurementDurationSetting { s.stopMeasurement() }
             }
-        }}
+        }
     }
     
     @MainActor
@@ -445,4 +445,4 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
             rootVC.present(activityVC, animated: true)
         }
     }
-
+}
