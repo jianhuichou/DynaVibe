@@ -4,31 +4,53 @@ import SwiftUI
 import Combine
 import CoreMotion
 
+// TODO: Move AccelerationUnit to a shared file (e.g., Models/SensorTypes.swift or similar)
+enum AccelerationUnit: String, CaseIterable, Identifiable {
+    case metersPerSecondSquared = "m/s²"
+    case gForce = "g"
+    var id: String { self.rawValue }
+}
+
 // Ensure MultiLineGraphView (for .AxisRanges), DataPoint, Axis types are accessible
 // from their respective files (e.g., UI/MultiLineGraphView.swift, Models/DataPoint.swift, Shared/AxisAndLegend.swift)
 
 final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
 
     // MARK: - Published State
+    // Raw data is always stored in m/s²
     @Published var latestX: Double = 0.0
     @Published var latestY: Double = 0.0
     @Published var latestZ: Double = 0.0
     @Published var timeSeriesData: [Axis: [DataPoint]] = [:]
     @Published var fftFrequencies: [Double] = []
     @Published var fftMagnitudes: [Axis: [Double]] = [:]
-    @Published var rmsX: Double = 0.0
-    @Published var rmsY: Double = 0.0
-    @Published var rmsZ: Double = 0.0
-    @Published var isRecording = false // True ONLY during actual data acquisition phase
+    // RMS, Min, Max values are also stored in m/s²
+    @Published var rmsX: Double? = nil // Changed from 0.0 to nil for consistency with min/max
+    @Published var rmsY: Double? = nil
+    @Published var rmsZ: Double? = nil
+    @Published var minX: Double? = nil
+    @Published var maxX: Double? = nil
+    @Published var minY: Double? = nil
+    @Published var maxY: Double? = nil
+    @Published var minZ: Double? = nil
+    @Published var maxZ: Double? = nil
+    @Published var peakFrequencyX: Double? = nil
+    @Published var peakFrequencyY: Double? = nil
+    @Published var peakFrequencyZ: Double? = nil
+
+    @Published var isRecording = false
     @Published var isFFTReady = false
-    @Published var timeLeft: Double = 0.0 // Shows pre-recording delay OR recording duration countdown
-    @Published var elapsedTime: Double = 0.0 // Tracks actual data recording time
+    @Published var timeLeft: Double = 0.0
+    @Published var elapsedTime: Double = 0.0
     @Published var axisRanges: MultiLineGraphView.AxisRanges = .init(minY: -1, maxY: 1, minX: 0, maxX: 10)
     enum MeasurementState { case idle, preRecordingCountdown, recording, completed }
     @Published private(set) var measurementState: MeasurementState = .idle
     @Published var activeAxes: Set<Axis> = [.x, .y, .z]
     @Published var currentRoll: Double = 0.0
     @Published var currentPitch: Double = 0.0
+
+    // Unit display related
+    @Published var currentUnitString: String = AccelerationUnit.metersPerSecondSquared.rawValue
 
     // MARK: - Settings
     @AppStorage("samplingRateSettingStorage") var samplingRateSettingStorage: Int = 128 {
@@ -46,8 +68,60 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     @AppStorage("useLinearAccelerationSetting") var useLinearAccelerationSetting: Bool = false {
         didSet { if oldValue != useLinearAccelerationSetting { toggleLiveAttitudeBasedOnSetting() } }
     }
+    @AppStorage("accelerationUnitSetting") private var storedAccelerationUnit: AccelerationUnit = .metersPerSecondSquared {
+        didSet {
+            // Since this is @AppStorage, didSet is synchronous.
+            // updateUnitDependentState is synchronous and updates @Published property,
+            // which should be done on MainActor.
+            // If class is not @MainActor, this needs dispatch.
+            // For now, assuming direct call is fine if updateUnitDependentState is simple.
+            // To be safe with @Published:
+            Task { @MainActor [weak self] in
+                self?.updateUnitDependentState()
+            }
+        }
+    }
 
-    // MARK: - Computed Properties
+    // MARK: - Unit Conversion
+    let gravity = 9.80665 // m/s²
+
+    // Computed properties for display values based on selected unit
+    var displayLatestX: Double { convertToPreferredUnit(latestX) }
+    var displayLatestY: Double { convertToPreferredUnit(latestY) }
+    var displayLatestZ: Double { convertToPreferredUnit(latestZ) }
+
+    var displayMinX: Double? { minX.map(convertToPreferredUnit) }
+    var displayMaxX: Double? { maxX.map(convertToPreferredUnit) }
+    var displayRmsX: Double? { rmsX.map(convertToPreferredUnit) }
+
+    var displayMinY: Double? { minY.map(convertToPreferredUnit) }
+    var displayMaxY: Double? { maxY.map(convertToPreferredUnit) }
+    var displayRmsY: Double? { rmsY.map(convertToPreferredUnit) }
+
+    var displayMinZ: Double? { minZ.map(convertToPreferredUnit) }
+    var displayMaxZ: Double? { maxZ.map(convertToPreferredUnit) }
+    var displayRmsZ: Double? { rmsZ.map(convertToPreferredUnit) }
+
+    private func convertToPreferredUnit(_ value: Double) -> Double {
+        if storedAccelerationUnit == .gForce {
+            return value / gravity
+        }
+        return value
+    }
+
+    private func updateUnitDependentState() { // This method is synchronous
+        self.currentUnitString = storedAccelerationUnit.rawValue
+        // Any other state that depends *solely* on the unit string can be updated here.
+        // If values themselves need re-processing (not just display conversion), that's more complex.
+        // For now, only currentUnitString is directly updated. Displayed values are computed.
+        // Force UI to update by sending objectWillChange if computed properties are not enough
+        // However, using @Published for currentUnitString and computed properties for values
+        // should make SwiftUI update automatically.
+        objectWillChange.send()
+    }
+
+
+    // MARK: - Computed Properties (ViewModel Logic)
     var actualCoreMotionRequestRate: Int {
         switch samplingRateSettingStorage {
         case 0: return 1000
@@ -70,16 +144,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         recordingStartDelaySetting > 0 ? recordingStartDelaySetting : (autoStopRecordingEnabled && measurementDurationSetting > 0 ? measurementDurationSetting : 0)
     }
     var collectedSamplesCount: Int { timeSeriesData[Axis.x]?.count ?? 0 }
-    var minX: Double? { timeSeriesData[Axis.x]?.min(by: { $0.value < $1.value })?.value }
-    var maxX: Double? { timeSeriesData[Axis.x]?.max(by: { $0.value < $1.value })?.value }
-    var minY: Double? { timeSeriesData[Axis.y]?.min(by: { $0.value < $1.value })?.value }
-    var maxY: Double? { timeSeriesData[Axis.y]?.max(by: { $0.value < $1.value })?.value }
-    var minZ: Double? { timeSeriesData[Axis.z]?.min(by: { $0.value < $1.value })?.value }
-    var maxZ: Double? { timeSeriesData[Axis.z]?.max(by: { $0.value < $1.value })?.value }
-    var peakFrequencyX: Double? { findPeakFrequency(for: .x) }
-    var peakFrequencyY: Double? { findPeakFrequency(for: .y) }
-    var peakFrequencyZ: Double? { findPeakFrequency(for: .z) }
-    var calculatedActualAverageSamplingRateForFFT: Double?
+    // Peak Frequencies are not acceleration values, so no unit conversion here.
 
     // MARK: - Private Properties
     private let recorder: AccelerationRecorder
@@ -97,8 +162,12 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         self.fftAnalyzer = FFTAnalysis()
         super.init()
 
+        // Initial update of unit-dependent state
+        // updateUnitDependentState() // Call synchronously first to set initial string before Task
+
         Task { @MainActor [weak self] in
             guard let strongSelf = self else { return }
+            strongSelf.updateUnitDependentState() // Ensure it's set up on MainActor
             strongSelf.recorder.motionSessionPublic.samplingRate = strongSelf.actualCoreMotionRequestRate
             Axis.allCases.forEach { axis in
                 strongSelf.timeSeriesData[axis] = []
@@ -113,7 +182,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     }
 
     deinit {
-        stopLiveAttitudeMonitoring() // This is synchronous
+        stopLiveAttitudeMonitoring()
         dataFetchTimer?.invalidate()
         durationCountdownTimer?.invalidate()
         preRecordingDelayTimer?.invalidate()
@@ -133,8 +202,6 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     }
 
     private func updateIdleStateDisplayValues() async {
-        // Since this func updates @Published properties, it should be on the MainActor.
-        // Task { @MainActor in } // No, this is already MainActor if called from MainActor context or is @MainActor func
         self.timeLeft = currentInitialTimeLeft
         self.axisRanges.maxX = currentEffectiveMaxGraphDuration
         self.elapsedTime = 0
@@ -142,9 +209,12 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
 
     // MARK: - Helper Methods
     private func resetRMSValuesAndAttitude() async {
-        // Task { @MainActor in } // No, this is already MainActor if called from MainActor context or is @MainActor func
-        self.rmsX = 0.0; self.rmsY = 0.0; self.rmsZ = 0.0
-        // This inner Task is to ensure roll/pitch are set on MainActor, which is good practice.
+        self.rmsX = nil; self.rmsY = nil; self.rmsZ = nil // Set to nil
+        self.minX = nil; self.maxX = nil
+        self.minY = nil; self.maxY = nil
+        self.minZ = nil; self.maxZ = nil
+        self.peakFrequencyX = nil; self.peakFrequencyY = nil; self.peakFrequencyZ = nil;
+
         await Task { @MainActor [weak self] in
             guard let strongSelf = self else { return }
             strongSelf.currentRoll = 0.0; strongSelf.currentPitch = 0.0
@@ -174,7 +244,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         motionSessionForLiveAttitude.provideUserAccelerationFromDeviceMotion = true
         _ = motionSessionForLiveAttitude.startDeviceMotionUpdates(for: self, interval: liveAttitudeUpdateInterval) { [weak self] (payload, error) in
             guard let strongSelf = self, strongSelf.isLiveAttitudeMonitoringActive, let dataPayload = payload, error == nil else { return }
-            Task { @MainActor in // This Task is for the CM completion handler
+            Task { @MainActor in
                 strongSelf.currentRoll = dataPayload.attitude.roll * 180.0 / .pi
                 strongSelf.currentPitch = dataPayload.attitude.pitch * 180.0 / .pi
             }
@@ -208,7 +278,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
             preRecordingDelayTimer?.invalidate()
             preRecordingDelayTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timerRef in
                 Task { @MainActor in
-                    guard let strongSelf = self, strongSelf.measurementState == .preRecordingCountdown else { // Use strongSelf
+                    guard let strongSelf = self, strongSelf.measurementState == .preRecordingCountdown else {
                         timerRef.invalidate(); return
                     }
                     if let delayStartTime = strongSelf.preRecordingPhaseStartTime {
@@ -327,12 +397,27 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
             axisRanges.minX = 0
             axisRanges.maxX = max(finalMaxTimestamp, currentEffectiveMaxGraphDuration)
 
+            // Calculate and store raw (m/s²) values
+            let rawRmsX = calculateOverallRMS(for: .x)
+            let rawRmsY = calculateOverallRMS(for: .y)
+            let rawRmsZ = calculateOverallRMS(for: .z)
+            // Min/Max are already from raw data
+            let xData = timeSeriesData[Axis.x]?.map { $0.value } ?? []
+            let yData = timeSeriesData[Axis.y]?.map { $0.value } ?? []
+            let zData = timeSeriesData[Axis.z]?.map { $0.value } ?? []
+
             if collectedSamplesCount > 0 {
-                self.rmsX = calculateOverallRMS(for: .x)
-                self.rmsY = calculateOverallRMS(for: .y)
-                self.rmsZ = calculateOverallRMS(for: .z)
+                self.rmsX = rawRmsX
+                self.rmsY = rawRmsY
+                self.rmsZ = rawRmsZ
+                self.minX = xData.min()
+                self.maxX = xData.max()
+                self.minY = yData.min()
+                self.maxY = yData.max()
+                self.minZ = zData.min()
+                self.maxZ = zData.max()
             } else {
-                await resetRMSValuesAndAttitude()
+                await resetRMSValuesAndAttitude() // Clears these values
             }
 
             calculateActualAverageRate()
@@ -365,7 +450,6 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
 
         latestX = 0; latestY = 0; latestZ = 0
         calculatedActualAverageSamplingRateForFFT = nil
-        // currentRoll/Pitch are reset within resetDataForNewRecording via resetRMSValuesAndAttitude
         recordingActualStartTime = nil
         preRecordingPhaseStartTime = nil
         if useLinearAccelerationSetting {
@@ -402,6 +486,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
             timeSeriesData[Axis.y]?.append(DataPoint(timestamp: sample.timestamp, value: sample.y))
             timeSeriesData[Axis.z]?.append(DataPoint(timestamp: sample.timestamp, value: sample.z))
             currentMaxAbsY = max(currentMaxAbsY, abs(sample.x), abs(sample.y), abs(sample.z))
+            // Update raw latestX/Y/Z values (these are always m/s²)
             self.latestX = sample.x; self.latestY = sample.y; self.latestZ = sample.z
         }
         if let lastTimestamp = newSamples.last?.timestamp { self.lastProcessedSampleTimestamp = lastTimestamp }
@@ -412,7 +497,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         }
     }
 
-    private func calculateOverallRMS(for axis: Axis) -> Double {
+    private func calculateOverallRMS(for axis: Axis) -> Double { // This returns raw m/s²
         guard let dataPoints = timeSeriesData[axis], !dataPoints.isEmpty else { return 0.0 }
         let values = dataPoints.map { $0.value }
         let sumOfSquares = values.reduce(0.0) { $0 + ($1 * $1) }
@@ -434,7 +519,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
     }
 
     @MainActor
-    func computeFFT() async { // Marked async
+    func computeFFT() async {
         guard collectedSamplesCount > 0, let rateForFFT = self.calculatedActualAverageSamplingRateForFFT else {isFFTReady = false; return}
         isFFTReady = false
         let xV = (timeSeriesData[Axis.x] ?? []).map{$0.value}
@@ -453,6 +538,10 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
                 strongSelf.fftMagnitudes[Axis.y]=rY.magnitude
                 strongSelf.fftMagnitudes[Axis.z]=rZ.magnitude
                 strongSelf.isFFTReady = true
+                // After FFT, update peak frequencies (raw m/s^2 based)
+                strongSelf.peakFrequencyX = strongSelf.findPeakFrequency(for: .x)
+                strongSelf.peakFrequencyY = strongSelf.findPeakFrequency(for: .y)
+                strongSelf.peakFrequencyZ = strongSelf.findPeakFrequency(for: .z)
             }
         }.value
     }
@@ -461,15 +550,11 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         if activeAxes.contains(axis){ if activeAxes.count > 1{activeAxes.remove(axis)}} else{activeAxes.insert(axis)}
     }
 
-    func exportCSV() { // Not marked @MainActor, but calls presentShareSheet which needs main actor
+    func exportCSV() {
         guard collectedSamplesCount > 0 else { print("No data to export."); return }
-        var csvString = "Timestamp,X,Y,Z\n" // Corrected newline
+        var csvString = "Timestamp,X,Y,Z\n"
         let nf = NumberFormatter(); nf.minimumFractionDigits = 4; nf.maximumFractionDigits = 8; nf.decimalSeparator = "."; nf.numberStyle = .decimal
         
-        // This data access should ideally be on the MainActor if timeSeriesData can be modified concurrently.
-        // However, since it's an ObservableObject, changes usually come from @MainActor already.
-        // For safety in a non-@MainActor func, one might wrap this data access.
-        // But given the context, assume it's called from a UI context that's already main.
         let xData = timeSeriesData[Axis.x] ?? []
         let yData = timeSeriesData[Axis.y] ?? []
         let zData = timeSeriesData[Axis.z] ?? []
@@ -477,22 +562,23 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         
         for i in 0..<rowCount {
             let ts = xData[i].timestamp
-            let xVal = xData[i].value
-            let yVal = yData[i].value
-            let zVal = zData[i].value
+            // Values for CSV should be in the selected unit
+            let xVal = convertToPreferredUnit(xData[i].value)
+            let yVal = convertToPreferredUnit(yData[i].value)
+            let zVal = convertToPreferredUnit(zData[i].value)
             
             let xStr = nf.string(from: NSNumber(value: xVal)) ?? "\(xVal)"
             let yStr = nf.string(from: NSNumber(value: yVal)) ?? "\(yVal)"
             let zStr = nf.string(from: NSNumber(value: zVal)) ?? "\(zVal)"
             
-            csvString += "\(String(format: "%.4f", ts)),\(xStr),\(yStr),\(zStr)\n" // Corrected newline
+            csvString += "\(String(format: "%.4f", ts)),\(xStr),\(yStr),\(zStr)\n"
         }
-        let df = DateFormatter(); df.dateFormat="yyyyMMdd_HHmmss"; let fn="DynaVibe_RawData_\(df.string(from: Date())).csv"
+        let df = DateFormatter(); df.dateFormat="yyyyMMdd_HHmmss"; let fn="DynaVibe_RawData_\(df.string(from: Date()))_(\(storedAccelerationUnit.rawValue.replacingOccurrences(of: "/", with: "-"))).csv"
         guard let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { print("No docs dir."); return }
         let fileURL = docsDir.appendingPathComponent(fn)
         do {
             try csvString.write(to: fileURL, atomically: true, encoding: .utf8)
-            Task { @MainActor [weak self] in // Ensure presentShareSheet is called on MainActor
+            Task { @MainActor [weak self] in
                 guard let strongSelf = self else { return }
                 strongSelf.presentShareSheet(for: fileURL)
             }
@@ -500,7 +586,7 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         catch { print("CSV write failed: \(error.localizedDescription)") }
     }
 
-    private func presentShareSheet(for url: URL) { // Not marked @MainActor, but uses DispatchQueue.main.async
+    private func presentShareSheet(for url: URL) {
         DispatchQueue.main.async {
             guard let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
                   let rootVC = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController else { return }
@@ -512,3 +598,5 @@ final class AccelerationViewModel: MotionSessionReceiver, ObservableObject {
         }
     }
 }
+
+[end of DynaVibe/ViewModels/AccelerationViewModel.swift]

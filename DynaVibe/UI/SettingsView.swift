@@ -1,11 +1,19 @@
 // UI/SettingsView.swift
 import SwiftUI
 
+// Define the enum for acceleration units here for now.
+// Ideally, this would be in a shared file if used by multiple views/viewmodels directly.
+enum AccelerationUnit: String, CaseIterable, Identifiable {
+    case metersPerSecondSquared = "m/s²"
+    case gForce = "g"
+    var id: String { self.rawValue }
+}
+
 struct SettingsView: View {
     @AppStorage("samplingRateSettingStorage") private var samplingRateSettingStorage: Int = 128
     
     struct RateOption: Hashable, Identifiable {
-        let id: Int // The value stored in AppStorage (0 for Max)
+        let id: Int
         let label: String
     }
 
@@ -13,7 +21,7 @@ struct SettingsView: View {
         RateOption(id: 32, label: "32 Hz"),
         RateOption(id: 64, label: "64 Hz"),
         RateOption(id: 128, label: "128 Hz"),
-        RateOption(id: 0, label: "Max") // 0 represents "Max"
+        RateOption(id: 0, label: "Max")
     ]
     
     @AppStorage("measurementDurationSetting") private var measurementDuration: Double = 10.0
@@ -22,6 +30,9 @@ struct SettingsView: View {
     
     @AppStorage("themeMode") private var themeMode: Bool = false
     @AppStorage("useLinearAccelerationSetting") private var useLinearAcceleration: Bool = false
+
+    // New AppStorage variable for acceleration unit
+    @AppStorage("accelerationUnitSetting") private var accelerationUnit: AccelerationUnit = .metersPerSecondSquared
 
     var body: some View {
         NavigationView {
@@ -55,6 +66,14 @@ struct SettingsView: View {
                 Section(header: Text("Analysis Settings")) {
                     Toggle("Subtract Gravity (Linear Acceleration)", isOn: $useLinearAcceleration)
                         .padding(.vertical, 4)
+
+                    // Picker for Acceleration Unit
+                    Picker("Acceleration Unit", selection: $accelerationUnit) {
+                        ForEach(AccelerationUnit.allCases) { unit in
+                            Text(unit.rawValue).tag(unit)
+                        }
+                    }
+                    // .pickerStyle(.segmented) // Optionally use segmented picker style
                 }
                 
                 Section(header: Text("Appearance")) {
@@ -65,7 +84,7 @@ struct SettingsView: View {
                     VStack {
                         Text("DynaVibe")
                             .font(.headline)
-                        Text("Version 0.1.1")
+                        Text("Version 0.1.1") // Example version
                             .font(.subheadline)
                         Text("Structural Dynamics & Vibration Analysis App")
                             .font(.caption)

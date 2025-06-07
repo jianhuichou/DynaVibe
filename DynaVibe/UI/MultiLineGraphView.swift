@@ -7,94 +7,216 @@ import Charts
 
 struct MultiLineGraphView: View {
 
-    struct AxisRanges: Equatable { // This nested struct remains the same
+    struct AxisRanges: Equatable {
         var minY: Double
         var maxY: Double
         var minX: Double
         var maxX: Double
     }
 
-    let plotData: [IdentifiableGraphPoint] // CHANGED: Now a single array of points
+    let plotData: [IdentifiableGraphPoint]
     let ranges: AxisRanges
     let isFrequencyDomain: Bool
-    let axisColors: [Axis: Color] // Passed in to define the color scale
+    let axisColors: [Axis: Color]
+    let yAxisLabelUnit: String // New property for Y-axis unit
+
+    @State private var selectedX: Double? = nil
+    @State private var selectedPlotPoints: [IdentifiableGraphPoint] = []
+    @State private var showCursorInfo: Bool = false // Controls visibility of the overlay
 
     var body: some View {
-        Chart(plotData) { point in // Iterate over the plotData directly
-            LineMark(
-                x: .value(isFrequencyDomain ? "Frequency" : "Time", point.xValue),
-                y: .value(isFrequencyDomain ? "Magnitude" : "Value", point.yValue)
+        ChartReader { chartProxyInReaderSIEGFRIEDLUND_MARKER_TAG_WORKER_PROVIDED_CODE_WILL_BE_INSERTED_HERE
+            let configuredChart = Chart {
+                ForEach(plotData) { point in
+                    LineMark(
+                        x: .value(isFrequencyDomain ? "Frequency" : "Time", point.xValue),
+                        y: .value(isFrequencyDomain ? "Magnitude" : "Value", point.yValue)
+                    )
+                    .foregroundStyle(by: .value("Axis", point.axis.rawValue))
+                    .interpolationMethod(.catmullRom)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+                }
+
+                if let selectedX = selectedX, showCursorInfo {
+                    RuleMark(x: .value("SelectedX", selectedX))
+                        .foregroundStyle(Color.gray.opacity(0.6))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .annotation(position: .top, alignment: .leading, spacing: 4) {
+                             Text(isFrequencyDomain ? String(format: "%.1f Hz", selectedX) : String(format: "%.2f s", selectedX))
+                                .font(.caption)
+                                .padding(EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4))
+                                .background(Capsule().fill(Material.thinMaterial))
+                                .foregroundColor(.primary)
+                                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+                        }
+                }
+
+                ForEach(selectedPlotPoints.filter { _ in showCursorInfo }) { point in
+                     PointMark(
+                         x: .value(isFrequencyDomain ? "Frequency" : "Time", point.xValue),
+                         y: .value(isFrequencyDomain ? "Magnitude" : "Value", point.yValue)
+                     )
+                     .foregroundStyle(axisColors[point.axis] ?? .gray)
+                     .symbolSize(50)
+                     .annotation(position: .overlay, alignment: .center, spacing: 0) {
+                         Text(String(format: "%.2f", point.yValue))
+                             .font(.caption2)
+                             .padding(2)
+                             .background(Color.black.opacity(0.5))
+                             .foregroundColor(.white)
+                             .clipShape(Capsule())
+                     }
+                 }
+            }
+            .chartForegroundStyleScale(
+                domain: Axis.allCases.map { $0.rawValue },
+                range: Axis.allCases.map { axisColors[$0] ?? .gray }
             )
-            // Use .foregroundStyle(by:) to group and color by axis
-            .foregroundStyle(by: .value("Axis", point.axis.rawValue))
-            .interpolationMethod(.catmullRom)
-            .lineStyle(StrokeStyle(lineWidth: 1.5))
+            .chartXScale(domain: ranges.minX ... max(ranges.minX + (isFrequencyDomain ? 0.1 : 0.01), ranges.maxX))
+            .chartYScale(domain: ranges.minY ... ranges.maxY)
+            .chartXAxisLabel(isFrequencyDomain ? "Frequency (Hz)" : "Time (s)", alignment: .center)
+            // Updated Y-Axis Label to use yAxisLabelUnit
+            .chartYAxisLabel(isFrequencyDomain ? "Magnitude" : "Acceleration (\(yAxisLabelUnit))", alignment: .centerLastTextBaseline)
+            .chartXAxis {
+                AxisMarks(position: .bottom, values: .automatic(desiredCount: ranges.maxX - ranges.minX > 2 ? 6 : 4)) { _ in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2,3]))
+                    AxisTick(stroke: StrokeStyle(lineWidth: 0.5))
+                    AxisValueLabel(format: FloatingPointFormatStyle<Double>().precision(.fractionLength( (ranges.maxX - ranges.minX) < 10 && ranges.maxX != 0 && !isFrequencyDomain ? 1:0)))
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 5)) { _ in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2,3]))
+                    AxisTick(stroke: StrokeStyle(lineWidth: 0.5))
+                    AxisValueLabel()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            configuredChart
+                .chartBackground { chartProxyForGesture in
+                    GeometryReader { geometryProxy in
+                        Rectangle().fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        let location = value.location
+                                        let rawXDataValue: Double? = chartProxyForGesture.value(atX: location.x, as: Double.self)
+
+                                        if let currentRawX = rawXDataValue {
+                                            if let (snappedX, pointsAtX) = snapToClosestDataX(
+                                                targetX: currentRawX,
+                                                inData: plotData,
+                                                chartProxy: chartProxyForGesture,
+                                                geometryProxy: geometryProxy
+                                            ) {
+                                                self.selectedX = snappedX
+                                                self.selectedPlotPoints = pointsAtX
+                                                self.showCursorInfo = true
+                                            } else {
+                                                self.selectedX = currentRawX
+                                                self.selectedPlotPoints = []
+                                                self.showCursorInfo = true
+                                            }
+                                        } else {
+                                            self.selectedX = nil
+                                            self.selectedPlotPoints = []
+                                            self.showCursorInfo = false
+                                        }
+                                    }
+                                    .onEnded { _ in
+                                        // To keep selection:
+                                        // self.showCursorInfo = (self.selectedX != nil && !self.selectedPlotPoints.isEmpty)
+                                        // Or to clear selection after drag:
+                                        // self.selectedX = nil
+                                        // self.selectedPlotPoints = []
+                                        // self.showCursorInfo = false
+                                    }
+                            )
+                    }
+                }
         }
-        // Define how rawValue strings map to actual Colors
-        .chartForegroundStyleScale(
-            domain: Axis.allCases.map { $0.rawValue }, // e.g., ["x", "y", "z"]
-            range: Axis.allCases.map { axisColors[$0] ?? .gray } // e.g., [.red, .green, .blue]
-        )
-        // Chart-level modifiers remain similar
-        .chartXScale(domain: ranges.minX ... max(ranges.minX + (isFrequencyDomain ? 0.1 : 0.01), ranges.maxX))
-        .chartYScale(domain: ranges.minY ... ranges.maxY)
-        .chartXAxisLabel(isFrequencyDomain ? "Frequency (Hz)" : "Time (s)", alignment: .center)
-        .chartYAxisLabel(isFrequencyDomain ? "Magnitude (m/s²)" : "Acceleration (m/s²)", alignment: .centerLastTextBaseline)
-        .chartXAxis {
-            AxisMarks(position: .bottom, values: .automatic(desiredCount: ranges.maxX - ranges.minX > 2 ? 6 : 4)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2,3]))
-                AxisTick(stroke: StrokeStyle(lineWidth: 0.5))
-                AxisValueLabel(format: FloatingPointFormatStyle<Double>().precision(.fractionLength( (ranges.maxX - ranges.minX) < 10 && ranges.maxX != 0 && !isFrequencyDomain ? 1:0)))
+    }
+
+    private func snapToClosestDataX(targetX: Double?,
+                                   inData: [IdentifiableGraphPoint],
+                                   chartProxy: ChartProxy,
+                                   geometryProxy: GeometryProxy) -> (snappedX: Double, pointsAtX: [IdentifiableGraphPoint])? {
+
+        guard let currentTargetX = targetX, !inData.isEmpty else { return nil }
+
+        let plotAreaFrame = geometryProxy.frame(in: .local)
+
+        let uniqueXValuesInView = Array(Set(inData.compactMap { dataPoint -> Double? in
+            guard let screenX = chartProxy.position(forX: dataPoint.xValue) else { return nil }
+            return (screenX >= 0 && screenX <= plotAreaFrame.width) ? dataPoint.xValue : nil
+        })).sorted()
+
+        guard !uniqueXValuesInView.isEmpty else { return nil }
+
+        var finalSnappedX: Double = uniqueXValuesInView[0]
+        var minDistance: CGFloat = .infinity
+
+        guard let targetScreenX = chartProxy.position(forX: currentTargetX) else {
+             return nil
+        }
+
+        for xData in uniqueXValuesInView {
+            guard let currentDataScreenX = chartProxy.position(forX: xData) else { continue }
+            let distance = abs(currentDataScreenX - targetScreenX)
+            if distance < minDistance {
+                minDistance = distance
+                finalSnappedX = xData
             }
         }
-        .chartYAxis {
-            AxisMarks(position: .leading, values: .automatic(desiredCount: 5)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2,3]))
-                AxisTick(stroke: StrokeStyle(lineWidth: 0.5))
-                AxisValueLabel()
-            }
+
+        let pointsAtSnappedX = inData.filter { $0.xValue == finalSnappedX }
+
+        if !pointsAtSnappedX.isEmpty {
+            return (finalSnappedX, pointsAtSnappedX)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        return nil
     }
 }
 
 // --- Preview Setup ---
-// This needs to be updated to provide the new `plotData` structure
 private struct MultiLineGraphView_PreviewHelper {
     static func generatePreviewSeries(axis: Axis, count: Int, scale: Double, offset: Double = 0) -> [IdentifiableGraphPoint] {
         (0..<count).map { index -> IdentifiableGraphPoint in
             let time = Double(index) / 50.0
-            let value = sin((time + offset) * 2 * .pi) * scale
+            let value = sin((time + offset) * 2 * .pi) * scale + Double.random(in: -0.1...0.1)
             return IdentifiableGraphPoint(axis: axis, xValue: time, yValue: value)
         }
     }
 
     static func makePlotData() -> [IdentifiableGraphPoint] {
-        let xSeries = generatePreviewSeries(axis: .x, count: 256, scale: 1.0)
-        let ySeries = generatePreviewSeries(axis: .y, count: 256, scale: 0.7, offset: 0.5)
-        let zSeries = generatePreviewSeries(axis: .z, count: 256, scale: 0.4, offset: 1.0)
-        return xSeries + ySeries + zSeries // Combine into a single array
+        let xSeries = generatePreviewSeries(axis: .x, count: 100, scale: 1.0)
+        let ySeries = generatePreviewSeries(axis: .y, count: 100, scale: 0.7, offset: 0.5)
+        let zSeries = generatePreviewSeries(axis: .z, count: 100, scale: 0.4, offset: 1.0)
+        return xSeries + ySeries + zSeries
     }
 
     static func makeRanges(fromPlotData data: [IdentifiableGraphPoint]) -> MultiLineGraphView.AxisRanges {
-        // Find min/max across all points for a sensible default range
         let minX = data.min(by: { $0.xValue < $1.xValue })?.xValue ?? 0
-        let maxX = data.max(by: { $0.xValue < $1.xValue })?.xValue ?? 5.0
-        return MultiLineGraphView.AxisRanges(minY: -1.2, maxY: 1.2, minX: minX, maxX: maxX)
+        let maxX = data.max(by: { $0.xValue < $1.xValue })?.xValue ?? 2.0
+        return MultiLineGraphView.AxisRanges(minY: -1.5, maxY: 1.5, minX: minX, maxX: maxX)
     }
     
     static let previewPlotData = makePlotData()
     static let previewRanges = makeRanges(fromPlotData: previewPlotData)
-    // These colors are used for the .chartForegroundStyleScale
     static let previewAxisColors: [Axis: Color] = [Axis.x: .red, Axis.y: .green, Axis.z: .blue]
+    static let previewYAxisUnit: String = "m/s²" // Added for preview
 }
 
-#Preview("Time Domain Graph") {
+#Preview("Time Domain Graph with Cursor") {
     MultiLineGraphView(
         plotData: MultiLineGraphView_PreviewHelper.previewPlotData,
         ranges: MultiLineGraphView_PreviewHelper.previewRanges,
         isFrequencyDomain: false,
-        axisColors: MultiLineGraphView_PreviewHelper.previewAxisColors
+        axisColors: MultiLineGraphView_PreviewHelper.previewAxisColors,
+        yAxisLabelUnit: MultiLineGraphView_PreviewHelper.previewYAxisUnit // Added for preview
     )
     .padding()
     .frame(height: 240)
@@ -102,12 +224,17 @@ private struct MultiLineGraphView_PreviewHelper {
 
 #Preview("Frequency Domain Graph (Empty)") {
     MultiLineGraphView(
-        plotData: [], // Empty plot data
+        plotData: [],
         ranges: MultiLineGraphView.AxisRanges(minY: 0, maxY: 1, minX: 0, maxX: 50),
         isFrequencyDomain: true,
-        axisColors: MultiLineGraphView_PreviewHelper.previewAxisColors
+        axisColors: MultiLineGraphView_PreviewHelper.previewAxisColors,
+        yAxisLabelUnit: "g" // Example with 'g'
     )
     .padding()
     .frame(height: 240)
     .overlay(Text("No Frequency Data").opacity(0.5))
 }
+// Dummy definitions for tool understanding, assuming they exist in the project
+ public enum Axis: String, CaseIterable, Identifiable { case x,y,z; public var id: String { rawValue }}
+ public struct IdentifiableGraphPoint: Identifiable { public var id = UUID(); public var axis: Axis; public var xValue: Double; public var yValue: Double }
+```

@@ -14,8 +14,14 @@ struct RealTimeDataView: View {
 
     private var currentGraphRanges: MultiLineGraphView.AxisRanges {
         if currentDisplayMode == .time {
+            // For time domain, Y-axis unit depends on the selected unit in ViewModel
+            // The actual range values in vm.axisRanges are raw (m/s^2).
+            // MultiLineGraphView will be responsible for displaying the correct unit string.
             return vm.axisRanges
         } else {
+            // Frequency domain Y-axis is magnitude, typically unitless or specific to FFT context,
+            // but if based on m/s^2 or g, it might also need adjustment if vm provides converted FFT magnitudes.
+            // For now, assume FFT magnitudes are not unit-converted for display scaling yet by vm.
             let firstFreq = vm.fftFrequencies.first ?? 0
             let relevantRate = vm.calculatedActualAverageSamplingRateForFFT ?? (Double(vm.actualCoreMotionRequestRate) / 2.0)
             let lastFreqPossible = relevantRate / 2.0
@@ -38,8 +44,10 @@ struct RealTimeDataView: View {
                 if let dataForAxis = vm.timeSeriesData[axisValue] {
                     for dataPoint in dataForAxis {
                         let currentAxis: Axis = axisValue
+                        // Pass raw m/s² data to the graph. Graph will use displayValue for Y-axis scaling if needed,
+                        // or just display the unit string. For now, assume graph takes raw, and label shows unit.
                         let currentXValue: Double = dataPoint.timestamp
-                        let currentYValue: Double = dataPoint.value
+                        let currentYValue: Double = dataPoint.value // Raw value
                         points.append(IdentifiableGraphPoint(axis: currentAxis, xValue: currentXValue, yValue: currentYValue))
                     }
                 }
@@ -51,7 +59,7 @@ struct RealTimeDataView: View {
                         guard index < magnitudesForAxis.count else { break }
                         let currentFftAxis: Axis = axisValue
                         let currentFftXValue: Double = freq
-                        let currentFftYValue: Double = magnitudesForAxis[index]
+                        let currentFftYValue: Double = magnitudesForAxis[index] // Raw magnitude
                         points.append(IdentifiableGraphPoint(axis: currentFftAxis, xValue: currentFftXValue, yValue: currentFftYValue))
                     }
                 }
@@ -60,23 +68,29 @@ struct RealTimeDataView: View {
         return points
     }
 
-    // Helper for formatting metric values
-    private func formattedMetric(_ value: Double?, unit: String = "g", precision: Int = 3) -> String { // Changed default unit to "g"
-        guard let value = value else { return "N/A" }
-        return String(format: "%.\(precision)f \(unit)", value)
+    // Helper for formatting metric values - uses vm.currentUnitString implicitly if not passed
+    // For this view, we will pass vm.currentUnitString to AxisMetricCard.
+    // These helpers are for the new summary table.
+    private func formattedMetric(_ value: Double?, precision: Int = 3) -> String {
+        guard let val = value else { return "N/A" } // Value is already converted by ViewModel's displayXXX properties
+        return String(format: "%.\(precision)f", val)
     }
 
-    // Helper for formatting frequency values
     private func formattedFrequency(_ value: Double?) -> String {
-        guard let value = value, value > 0 else { return "N/A" } // Also check if value > 0 for frequency
+        guard let value = value, value > 0 else { return "N/A" }
         return String(format: "%.1f Hz", value)
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing:0) {
-                GlobalLiveSummaryCard(latestX: vm.latestX, latestY: vm.latestY, latestZ: vm.latestZ)
-                    .padding(.horizontal).padding(.top, 8)
+                GlobalLiveSummaryCard(
+                    latestX: vm.displayLatestX,
+                    latestY: vm.displayLatestY,
+                    latestZ: vm.displayLatestZ,
+                    unitString: vm.currentUnitString
+                )
+                .padding(.horizontal).padding(.top, 8)
 
                 Picker("Graph Mode", selection: $currentDisplayMode) {
                     ForEach(GraphDisplayMode.allCases) { mode in Text(mode.rawValue).tag(mode) }
@@ -132,22 +146,27 @@ struct RealTimeDataView: View {
                     }
                 }.padding(.horizontal).padding(.bottom, 8)
 
-                MultiLineGraphView(plotData: graphPlotData, ranges: currentGraphRanges, isFrequencyDomain: currentDisplayMode == .frequency, axisColors: axisColors)
-                    .frame(minHeight: 200, idealHeight: 250, maxHeight: .infinity).padding(.horizontal)
-                    .background(Color(UIColor.systemGray6)).cornerRadius(10).padding(.bottom, 8)
+                MultiLineGraphView(
+                    plotData: graphPlotData,
+                    ranges: currentGraphRanges,
+                    isFrequencyDomain: currentDisplayMode == .frequency,
+                    axisColors: axisColors,
+                    yAxisLabelUnit: vm.currentUnitString // Pass the unit string
+                )
+                .frame(minHeight: 200, idealHeight: 250, maxHeight: .infinity).padding(.horizontal)
+                .background(Color(UIColor.systemGray6)).cornerRadius(10).padding(.bottom, 8)
 
-                // === START OF MODIFIED POST-MEASUREMENT SUMMARY SECTION ===
                 if vm.measurementState == .completed && vm.collectedSamplesCount > 0 {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Results Summary:").font(.headline).padding(.bottom, 2)
 
                         HStack {
                             Text("X:").font(.caption.bold()).frame(width: 25, alignment: .leading)
-                            Text("Min: \(formattedMetric(vm.minX, unit:"g"))")
+                            Text("Min: \(formattedMetric(vm.displayMinX))")
                             Spacer()
-                            Text("Max: \(formattedMetric(vm.maxX, unit:"g"))")
+                            Text("Max: \(formattedMetric(vm.displayMaxX))")
                             Spacer()
-                            Text("RMS: \(formattedMetric(vm.rmsX, unit:"g"))")
+                            Text("RMS: \(formattedMetric(vm.displayRmsX))")
                             Spacer()
                             Text("Peak: \(formattedFrequency(vm.peakFrequencyX))")
                         }.font(.caption)
@@ -156,11 +175,11 @@ struct RealTimeDataView: View {
 
                         HStack {
                             Text("Y:").font(.caption.bold()).frame(width: 25, alignment: .leading)
-                            Text("Min: \(formattedMetric(vm.minY, unit:"g"))")
+                            Text("Min: \(formattedMetric(vm.displayMinY))")
                             Spacer()
-                            Text("Max: \(formattedMetric(vm.maxY, unit:"g"))")
+                            Text("Max: \(formattedMetric(vm.displayMaxY))")
                             Spacer()
-                            Text("RMS: \(formattedMetric(vm.rmsY, unit:"g"))")
+                            Text("RMS: \(formattedMetric(vm.displayRmsY))")
                             Spacer()
                             Text("Peak: \(formattedFrequency(vm.peakFrequencyY))")
                         }.font(.caption)
@@ -169,11 +188,11 @@ struct RealTimeDataView: View {
 
                         HStack {
                             Text("Z:").font(.caption.bold()).frame(width: 25, alignment: .leading)
-                            Text("Min: \(formattedMetric(vm.minZ, unit:"g"))")
+                            Text("Min: \(formattedMetric(vm.displayMinZ))")
                             Spacer()
-                            Text("Max: \(formattedMetric(vm.maxZ, unit:"g"))")
+                            Text("Max: \(formattedMetric(vm.displayMaxZ))")
                             Spacer()
-                            Text("RMS: \(formattedMetric(vm.rmsZ, unit:"g"))")
+                            Text("RMS: \(formattedMetric(vm.displayRmsZ))")
                             Spacer()
                             Text("Peak: \(formattedFrequency(vm.peakFrequencyZ))")
                         }.font(.caption)
@@ -183,16 +202,14 @@ struct RealTimeDataView: View {
                     .cornerRadius(10)
                     .padding(.horizontal)
                     .padding(.vertical, 4)
-                    .frame(height: 140) // Adjusted height for the new layout
+                    .frame(height: 140)
                 } else {
-                    // Keep a placeholder to maintain layout consistency if no results
                     Rectangle()
                         .fill(Color.clear)
-                        .frame(height: 140) // Match the expected height of the summary
+                        .frame(height: 140)
                         .padding(.horizontal)
                         .padding(.vertical, 4)
                 }
-                // === END OF MODIFIED POST-MEASUREMENT SUMMARY SECTION ===
                 
                 HStack(spacing: 12) {
                     Button(action: {
@@ -276,13 +293,14 @@ public enum Axis: String, CaseIterable, Identifiable { case x,y,z; public var id
 public struct IdentifiableGraphPoint: Identifiable { public var id = UUID(); var axis: Axis; var xValue: Double; var yValue: Double }
 public struct MultiLineGraphView: View {
    public var plotData: [IdentifiableGraphPoint]
-   public var ranges: MultiLineGraphView.AxisRanges
+   public var ranges: MultiLineGraphView.AxisRanges // Ensure this matches the struct within MultiLineGraphView
    public var isFrequencyDomain: Bool
    public var axisColors: [Axis : Color]
-   public init(plotData: [IdentifiableGraphPoint], ranges: MultiLineGraphView.AxisRanges, isFrequencyDomain: Bool, axisColors: [Axis : Color]) {
-       self.plotData = plotData; self.ranges = ranges; self.isFrequencyDomain = isFrequencyDomain; self.axisColors = axisColors
+   public var yAxisLabelUnit: String // Added this
+   public init(plotData: [IdentifiableGraphPoint], ranges: MultiLineGraphView.AxisRanges, isFrequencyDomain: Bool, axisColors: [Axis : Color], yAxisLabelUnit: String) { // Added to init
+       self.plotData = plotData; self.ranges = ranges; self.isFrequencyDomain = isFrequencyDomain; self.axisColors = axisColors; self.yAxisLabelUnit = yAxisLabelUnit
    }
-   public var body: some View { Text("Graph Placeholder").frame(height:200) }
+   public var body: some View { Text("Graph Placeholder (\(yAxisLabelUnit))").frame(height:200) }
    public struct AxisRanges { var minY: Double = 0; var maxY: Double = 1; var minX: Double = 0; var maxX: Double = 1 }
 }
 public struct BubbleLevelView: View {
@@ -292,18 +310,37 @@ public struct BubbleLevelView: View {
 }
 public struct GlobalLiveSummaryCard: View {
    public var latestX: Double; public var latestY: Double; public var latestZ: Double
-   public init(latestX: Double, latestY: Double, latestZ: Double) {self.latestX=latestX; self.latestY=latestY; self.latestZ=latestZ}
-   public var body: some View { Text("Global Summary: X\(latestX, specifier: "%.2f") Y\(latestY, specifier: "%.2f") Z\(latestZ, specifier: "%.2f")").font(.caption) }
+   public var unitString: String // Added this
+   public init(latestX: Double, latestY: Double, latestZ: Double, unitString: String) { // Added to init
+        self.latestX=latestX; self.latestY=latestY; self.latestZ=latestZ; self.unitString = unitString
+    }
+   public var body: some View { Text("Global Summary: X\(latestX, specifier: "%.2f") Y\(latestY, specifier: "%.2f") Z\(latestZ, specifier: "%.2f") \(unitString)").font(.caption) }
 }
-public struct AxisMetricCard: View { // Not used in this version of RealTimeDataView's summary
+public struct AxisMetricCard: View {
    public var title: String; public var value: Double?; public var unit: String; public var peakFrequency: Double?
    public init(title: String, value: Double?, unit: String, peakFrequency: Double?) {self.title=title; self.value=value; self.unit=unit; self.peakFrequency=peakFrequency}
-   public var body: some View { Text("\(title): \(value ?? 0, specifier: "%.2f") \(unit)").font(.caption) }
+   public var body: some View { Text("\(title): \(value ?? 0, specifier: "%.2f") \(unit) Peak: \(peakFrequency ?? 0, specifier: "%.1f")Hz").font(.caption) }
 }
 
 
 public class AccelerationViewModel: ObservableObject {
    @Published public var latestX: Double = 0.123; @Published public var latestY: Double = 0.456; @Published public var latestZ: Double = 0.789
+   // Display computed properties
+    public var displayLatestX: Double { latestX } // Simplified for stub
+    public var displayLatestY: Double { latestY }
+    public var displayLatestZ: Double { latestZ }
+    public var displayMinX: Double? { minX }
+    public var displayMaxX: Double? { maxX }
+    public var displayRmsX: Double? { rmsX }
+    public var displayMinY: Double? { minY }
+    public var displayMaxY: Double? { maxY }
+    public var displayRmsY: Double? { rmsY }
+    public var displayMinZ: Double? { minZ }
+    public var displayMaxZ: Double? { maxZ }
+    public var displayRmsZ: Double? { rmsZ }
+    @Published public var currentUnitString: String = "m/s²"
+
+
    @Published public var timeSeriesData: [Axis: [DataPoint]] = [.x: [DataPoint(timestamp:0, value:0)], .y: [], .z: []]
    @Published public var fftFrequencies: [Double] = [10,20,30]; @Published public var fftMagnitudes: [Axis: [Double]] = [.x:[0.1,0.2,0.3], .y:[0.1,0.2,0.3], .z:[0.1,0.2,0.3]]
    @Published public var rmsX: Double? = 0.11; @Published public var rmsY: Double? = 0.22; @Published public var rmsZ: Double? = 0.33
@@ -320,7 +357,7 @@ public class AccelerationViewModel: ObservableObject {
    @Published public var elapsedTime: Double = 0.0
    @Published public var axisRanges: MultiLineGraphView.AxisRanges = .init(minY: -1, maxY: 1, minX: 0, maxX: 10)
    public enum MeasurementState { case idle, preRecordingCountdown, recording, completed }
-   @Published public private(set) var measurementState: MeasurementState = .completed // Set to completed for preview of summary
+   @Published public private(set) var measurementState: MeasurementState = .completed
    @Published public var activeAxes: Set<Axis> = [.x, .y, .z]
    @Published public var currentRoll: Double = 5.0
    @Published public var currentPitch: Double = -2.5
@@ -332,7 +369,7 @@ public class AccelerationViewModel: ObservableObject {
        case .idle: return "Idle"
        case .preRecordingCountdown: return "Starting in..."
        case .recording: return autoStopRecordingEnabled && measurementDurationSetting > 0 ? "Recording..." : "Recording (Manual Continuous)"
-       case .completed: return "Analysis Completed" // Changed for preview
+       case .completed: return "Analysis Completed"
        }
    }
    public var calculatedActualAverageSamplingRateForFFT: Double? = 128.0

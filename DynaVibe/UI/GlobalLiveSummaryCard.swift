@@ -5,6 +5,7 @@ struct GlobalLiveSummaryCard: View {
     let latestX: Double
     let latestY: Double
     let latestZ: Double
+    let unitString: String // New property for the unit
 
     private func formattedValue(_ value: Double) -> String {
         return String(format: "%.3f", value)
@@ -20,7 +21,7 @@ struct GlobalLiveSummaryCard: View {
                 Text(formattedValue(latestX))
                     .fontWeight(.medium)
                     .foregroundColor(.red)
-                Text("m/s²")
+                Text(unitString) // Use unitString
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -34,7 +35,7 @@ struct GlobalLiveSummaryCard: View {
                 Text(formattedValue(latestY))
                     .fontWeight(.medium)
                     .foregroundColor(.green)
-                Text("m/s²")
+                Text(unitString) // Use unitString
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -48,18 +49,18 @@ struct GlobalLiveSummaryCard: View {
                 Text(formattedValue(latestZ))
                     .fontWeight(.medium)
                     .foregroundColor(.blue)
-                Text("m/s²")
+                Text(unitString) // Use unitString
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
             Spacer()
         }
-        .padding(.vertical, 10) // Keep original vertical padding
-        .padding(.horizontal, 8) // Keep original horizontal padding
+        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
         .background(Color(UIColor.systemGray6))
-        .cornerRadius(10) // Changed from 12 to 10 as per example in prompt
+        .cornerRadius(10)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Live acceleration. X: \(formattedValue(latestX)) meters per second squared, Y: \(formattedValue(latestY)) meters per second squared, Z: \(formattedValue(latestZ)) meters per second squared.")
+        .accessibilityLabel("Live acceleration. X: \(formattedValue(latestX)) \(unitString), Y: \(formattedValue(latestY)) \(unitString), Z: \(formattedValue(latestZ)) \(unitString).")
     }
 }
 
@@ -69,7 +70,18 @@ struct GlobalLiveSummaryCard_Previews: PreviewProvider {
         GlobalLiveSummaryCard(
             latestX: -0.117,
             latestY: -0.086,
-            latestZ: 0.692
+            latestZ: 0.692,
+            unitString: "m/s²" // Provide sample unit string
+        )
+        .padding()
+        .previewLayout(.sizeThatFits)
+        .background(Color.gray.opacity(0.1))
+
+        GlobalLiveSummaryCard(
+            latestX: 0.012,
+            latestY: 0.009,
+            latestZ: 0.070,
+            unitString: "g" // Provide sample unit string
         )
         .padding()
         .previewLayout(.sizeThatFits)
