@@ -2,7 +2,8 @@
 import Foundation
 import CoreMotion
 
-// MotionSessionReceiver class - (internal access by default)
+// This is the single, authoritative definition of MotionSessionReceiver.
+// It allows any class to register for motion updates.
 class MotionSessionReceiver: Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
     static func ==(lhs: MotionSessionReceiver, rhs: MotionSessionReceiver) -> Bool { return lhs === rhs }
@@ -23,7 +24,7 @@ final class MotionSession {
     private var accelerometerReceivers: [MotionSessionReceiver: (_ data: CMAccelerometerData?, _ error: Error?) -> Void] = [:]
     private var deviceMotionReceivers: [MotionSessionReceiver: (_ data: DeviceMotionUpdatePayload?, _ error: Error?) -> Void] = [:]
     private let receiversLock = NSLock()
-    
+
     var samplingRate: Int = 100 // Target rate for the *next* stream start
     var provideUserAccelerationFromDeviceMotion: Bool = true
 
@@ -48,15 +49,14 @@ final class MotionSession {
         
         let effectiveInterval = interval ?? (1.0 / Double(samplingRate))
         receiversLock.withLock { accelerometerReceivers[receiver] = handler }
-        
-        // If already active but interval differs, or if not active, (re)start.
+
         if motionManager.isAccelerometerActive && motionManager.accelerometerUpdateInterval != effectiveInterval {
             print("MotionSession: Raw Accelerometer active with different interval. Restarting for new interval: \(effectiveInterval)")
             motionManager.stopAccelerometerUpdates()
-            accelerometerRunning = false // Mark as not running before restart
+            accelerometerRunning = false
         }
         
-        if !accelerometerRunning { // Start if not running (or just stopped to change interval)
+        if !accelerometerRunning {
             accelerometerRunning = true
             motionManager.accelerometerUpdateInterval = effectiveInterval
             print("MotionSession: Starting Raw Accelerometer with interval \(effectiveInterval) (Rate: \(1.0/effectiveInterval) Hz)")
@@ -88,17 +88,16 @@ final class MotionSession {
     ) -> Bool {
         guard isDeviceMotionAvailable else { print("⚠️ Device Motion not available."); return false }
 
-        let effectiveInterval = interval ?? (1.0 / Double(samplingRate)) // Use current samplingRate of MotionSession
+        let effectiveInterval = interval ?? (1.0 / Double(samplingRate))
         receiversLock.withLock { deviceMotionReceivers[receiver] = handler }
 
-        // --- KEY CHANGE: Restart if active with different interval ---
         if motionManager.isDeviceMotionActive && motionManager.deviceMotionUpdateInterval != effectiveInterval {
             print("MotionSession: Device Motion active with different interval. Restarting for new interval: \(effectiveInterval)")
-            motionManager.stopDeviceMotionUpdates() // Stop current stream
-            deviceMotionRunning = false // Mark as not running before restart
+            motionManager.stopDeviceMotionUpdates()
+            deviceMotionRunning = false
         }
         
-        if !deviceMotionRunning { // Start if not running (or just stopped to change interval)
+        if !deviceMotionRunning {
             deviceMotionRunning = true
             motionManager.deviceMotionUpdateInterval = effectiveInterval
             print("MotionSession: Starting Device Motion with interval \(effectiveInterval) (Rate: \(1.0/effectiveInterval) Hz)")
@@ -113,7 +112,7 @@ final class MotionSession {
                     let accelerationMS2 = ProcessedAccelerationData(x: processedAccelG.x*9.80665, y: processedAccelG.y*9.80665, z: processedAccelG.z*9.80665)
                     payload = DeviceMotionUpdatePayload(acceleration: accelerationMS2, attitude: motion.attitude, rotationRate: motion.rotationRate, gravity: motion.gravity)
                 }
-                // Notify all current receivers for device motion
+                
                 self.receiversLock.withLock {
                     self.deviceMotionReceivers.values.forEach { $0(payload, error) }
                 }
@@ -132,11 +131,11 @@ final class MotionSession {
     }
 
     func stopAllUpdates(for receiver: MotionSessionReceiver) {
-        stopRawAccelerometerUpdates(for: receiver); stopDeviceMotionUpdates(for: receiver)
+        stopRawAccelerometerUpdates(for: receiver)
+        stopDeviceMotionUpdates(for: receiver)
     }
 }
 
-// NSLock extension - keep as is
 extension NSLock {
     @discardableResult
     func withLock<T>(_ body: () throws -> T) rethrows -> T {

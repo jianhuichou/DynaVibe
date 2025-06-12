@@ -1,8 +1,5 @@
-// DashboardView.swift
+// UI/DashboardView.swift
 import SwiftUI
-
-// Ensure Axis enum is accessible here (e.g., from Shared/AxisAndLegend.swift if it's in the target)
-// Ensure DataPoint struct is accessible here (e.g., from Models/DataPoint.swift if it's in the target)
 
 private struct MetricRow: View {
     let label: String
@@ -12,6 +9,8 @@ private struct MetricRow: View {
         HStack {
             Text(label)
             Spacer()
+            // The view model now provides display-ready properties that handle unit conversion.
+            // This view doesn't need to format the number itself, just handle the optional.
             Text(value != nil ? String(format: "%.3f", value!) : "N/A")
                 .foregroundColor(value != nil ? .primary : .secondary)
         }
@@ -19,22 +18,27 @@ private struct MetricRow: View {
 }
 
 struct DashboardView: View {
+    // The Dashboard now likely shares an instance of the view model from a higher-level view,
+    // or creates its own. @StateObject is appropriate if this view "owns" the model.
     @StateObject private var viewModel = AccelerationViewModel()
 
+    // This computed property correctly checks the sample count from the view model
     private var hasData: Bool {
-        return viewModel.collectedSamplesCount > 0
+        // Accessing a simple property like this is fine.
+        return (viewModel.timeSeriesData[.x]?.count ?? 0) > 0
     }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Extrema (m/s²)") {
-                    MetricRow(label: "Min X", value: viewModel.minX)
-                    MetricRow(label: "Max X", value: viewModel.maxX)
-                    MetricRow(label: "Min Y", value: viewModel.minY)
-                    MetricRow(label: "Max Y", value: viewModel.maxY)
-                    MetricRow(label: "Min Z", value: viewModel.minZ)
-                    MetricRow(label: "Max Z", value: viewModel.maxZ)
+                // The view model provides display-ready, optional values which are unit-converted.
+                Section("Extrema (\(viewModel.currentUnitString))") {
+                    MetricRow(label: "Min X", value: viewModel.displayMinX)
+                    MetricRow(label: "Max X", value: viewModel.displayMaxX)
+                    MetricRow(label: "Min Y", value: viewModel.displayMinY)
+                    MetricRow(label: "Max Y", value: viewModel.displayMaxY)
+                    MetricRow(label: "Min Z", value: viewModel.displayMinZ)
+                    MetricRow(label: "Max Z", value: viewModel.displayMaxZ)
                 }
 
                 Section("Peak FFT (Hz)") {
@@ -42,25 +46,26 @@ struct DashboardView: View {
                     MetricRow(label: "Y", value: viewModel.peakFrequencyY)
                     MetricRow(label: "Z", value: viewModel.peakFrequencyZ)
                 }
+                
                 // Display RMS if data is completed
                 if viewModel.measurementState == .completed && hasData {
-                    Section("Overall RMS (m/s²)") {
-                        MetricRow(label: "RMS X", value: viewModel.rmsX)
-                        MetricRow(label: "RMS Y", value: viewModel.rmsY)
-                        MetricRow(label: "RMS Z", value: viewModel.rmsZ)
+                    Section("Overall RMS (\(viewModel.currentUnitString))") {
+                        MetricRow(label: "RMS X", value: viewModel.displayRmsX)
+                        MetricRow(label: "RMS Y", value: viewModel.displayRmsY)
+                        MetricRow(label: "RMS Z", value: viewModel.displayRmsZ)
                     }
                 }
             }
-            .navigationTitle("Analysis Summary") // Changed title for clarity
+            .navigationTitle("Analysis Summary")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        // CORRECTED: Call the method directly
+                        // [FIXED] Correctly call the exportCSV() function with parentheses.
                         viewModel.exportCSV()
                     } label: {
                         Label("Export CSV", systemImage: "square.and.arrow.up")
                     }
-                    .disabled(!hasData || viewModel.measurementState != .completed) // Also disable if not completed
+                    .disabled(!hasData || viewModel.measurementState != .completed)
                 }
             }
         }
