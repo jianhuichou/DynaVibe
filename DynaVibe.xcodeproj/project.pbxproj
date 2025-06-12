@@ -29,9 +29,30 @@
 		442384A12DBBFC1B00F718D2 /* DynaVibeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DynaVibeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		4477DA9C2DF55876005C124D /* Exceptions for "DynaVibe" folder in "DynaVibeTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				UI/SettingsView.swift,
+			);
+			target = 442384962DBBFC1B00F718D2 /* DynaVibeTests */;
+		};
+		4477DA9D2DF55876005C124D /* Exceptions for "DynaVibe" folder in "DynaVibeUITests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				UI/SettingsView.swift,
+			);
+			target = 442384A02DBBFC1B00F718D2 /* DynaVibeUITests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		442384872DBBFC1900F718D2 /* DynaVibe */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				4477DA9C2DF55876005C124D /* Exceptions for "DynaVibe" folder in "DynaVibeTests" target */,
+				4477DA9D2DF55876005C124D /* Exceptions for "DynaVibe" folder in "DynaVibeUITests" target */,
+			);
 			path = DynaVibe;
 			sourceTree = "<group>";
 		};
