@@ -22,7 +22,7 @@ public struct MultiLineGraphView: View {
     @State private var showCursorInfo: Bool = false
     @State private var isLoading: Bool = false
     @State private var chartXRange: ClosedRange<Double>? = nil // For zoom/pan
-    @GestureState private var dragOffset: CGSize = .zero
+    @State private var dragStartRange: ClosedRange<Double>? = nil
 
     public var body: some View {
         VStack(spacing: 8) {
@@ -151,21 +151,54 @@ public struct MultiLineGraphView: View {
 
     // --- Zoom and Pan Gesture ---
     private func zoomAndPanGesture() -> some Gesture {
-        MagnificationGesture()
+        let magnification = MagnificationGesture()
             .onChanged { value in
-                let range = (chartXRange ?? (ranges.minX...ranges.maxX))
+                let range = chartXRange ?? (ranges.minX...ranges.maxX)
                 let center = (range.lowerBound + range.upperBound) / 2
                 let width = (range.upperBound - range.lowerBound) / value
-                let newLower = max(ranges.minX, center - width/2)
-                let newUpper = min(ranges.maxX, center + width/2)
-                chartXRange = newLower...newUpper
+                let newLower = max(ranges.minX, center - width / 2)
+                let newUpper = min(ranges.maxX, center + width / 2)
+                chartXRange = newLower ... newUpper
             }
             .onEnded { _ in
-                if let range = chartXRange, range.upperBound - range.lowerBound < 0.1 {
-                    chartXRange = ranges.minX...ranges.maxX
+                dragStartRange = chartXRange
+                if let range = chartXRange,
+                   range.upperBound - range.lowerBound < 0.1 {
+                    chartXRange = ranges.minX ... ranges.maxX
                 }
             }
-        // Could add DragGesture for pan if desired
+
+        let drag = DragGesture()
+            .onChanged { value in
+                if dragStartRange == nil {
+                    dragStartRange = chartXRange ?? (ranges.minX ... ranges.maxX)
+                }
+
+                guard let startRange = dragStartRange else { return }
+                let domainWidth = startRange.upperBound - startRange.lowerBound
+                let translationRatio = Double(value.translation.width / 200)
+                let delta = translationRatio * domainWidth
+
+                var newLower = startRange.lowerBound - delta
+                var newUpper = startRange.upperBound - delta
+
+                if newLower < ranges.minX {
+                    let shift = ranges.minX - newLower
+                    newLower += shift
+                    newUpper += shift
+                }
+                if newUpper > ranges.maxX {
+                    let shift = newUpper - ranges.maxX
+                    newLower -= shift
+                    newUpper -= shift
+                }
+                chartXRange = newLower ... newUpper
+            }
+            .onEnded { _ in
+                dragStartRange = chartXRange
+            }
+
+        return drag.simultaneously(with: magnification)
     }
 
     // Snap to the nearest x-value in plotData (for the visible axes)
