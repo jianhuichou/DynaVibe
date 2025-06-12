@@ -13,7 +13,7 @@ struct HelpView: View {
                     Text("Getting Started")
                         .font(.title2)
                         .bold()
-                    Text("1. Go to **Real-Time Data** to start measurements.\n2. Adjust settings under **Settings**.\n3. View saved projects under **Projects**.\n4. Export your data as CSV.\n5. Switch to the Frequency tab to see FFT results.")
+                    Text("1. Go to **Real-Time Data** to start measurements.\n2. Adjust settings under **Settings**.\n3. View saved projects under **Projects**.\n4. Export your data as CSV.\n5. Switch to Frequency mode using the graph toggle to see FFT results.")
                 }
                 
                 Group {
