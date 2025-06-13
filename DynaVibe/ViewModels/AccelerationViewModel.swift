@@ -25,6 +25,8 @@ final class AccelerationViewModel: ObservableObject {
     @Published var elapsedTime: Double = 0.0
     
     @Published var axisRanges: MultiLineGraphView.AxisRanges = .init(minY: -1, maxY: 1, minX: 0, maxX: 10.0)
+    @Published var xAxisTicks: [Double] = []
+    @Published var yAxisTicks: [Double] = []
     
     enum MeasurementState { case idle, preRecordingCountdown, recording, completed }
     @Published private(set) var measurementState: MeasurementState = .idle
@@ -271,11 +273,13 @@ final class AccelerationViewModel: ObservableObject {
         
         if let lastSample = allRecordedData.last {
             latestX = lastSample.x; latestY = lastSample.y; latestZ = lastSample.z
-            
+
             if measurementState == .recording && !autoStopRecordingEnabled {
                 let windowDuration = 10.0
                 axisRanges.maxX = lastSample.timestamp
                 axisRanges.minX = max(0, lastSample.timestamp - windowDuration)
+                let xAxis = niceAxisRangeAndTicks(min: axisRanges.minX, max: axisRanges.maxX)
+                xAxisTicks = xAxis.ticks
             }
         }
     }
@@ -297,6 +301,10 @@ final class AccelerationViewModel: ObservableObject {
         axisRanges.minX = 0
         axisRanges.maxX = autoStopRecordingEnabled ? measurementDuration : 10.0
         axisRanges.minY = -1.0; axisRanges.maxY = 1.0
+        let xAxis = niceAxisRangeAndTicks(min: axisRanges.minX, max: axisRanges.maxX)
+        let yAxis = niceAxisRangeAndTicks(min: axisRanges.minY, max: axisRanges.maxY)
+        xAxisTicks = xAxis.ticks
+        yAxisTicks = yAxis.ticks
     }
 
     private func calculateFinalMetrics() {
@@ -307,8 +315,12 @@ final class AccelerationViewModel: ObservableObject {
         else { calculatedActualAverageSamplingRateForFFT = Double(samplingRateSetting) }
         
         rmsX = calculateOverallRMS(for: .x); rmsY = calculateOverallRMS(for: .y); rmsZ = calculateOverallRMS(for: .z)
-        
+
         axisRanges.minX = firstTimestamp; axisRanges.maxX = lastTimestamp
+        let xAxis = niceAxisRangeAndTicks(min: axisRanges.minX, max: axisRanges.maxX)
+        let yAxis = niceAxisRangeAndTicks(min: axisRanges.minY, max: axisRanges.maxY)
+        xAxisTicks = xAxis.ticks
+        yAxisTicks = yAxis.ticks
     }
 
     private func calculateOverallRMS(for axis: Axis) -> Double? {
@@ -410,7 +422,8 @@ final class AccelerationViewModel: ObservableObject {
             axisRanges.maxX = xAxis.niceMax
             axisRanges.minY = yAxis.niceMin
             axisRanges.maxY = yAxis.niceMax
-            // Optionally: store ticks for use in the graph view
+            xAxisTicks = xAxis.ticks
+            yAxisTicks = yAxis.ticks
         }
     }
 }
