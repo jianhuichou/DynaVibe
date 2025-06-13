@@ -1,8 +1,14 @@
 // UI/MultiLineGraphView.swift
 import SwiftUI
 import Charts
+import os
 
 public struct MultiLineGraphView: View {
+
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "DynaVibe",
+        category: "MultiLineGraphView"
+    )
 
     public struct AxisRanges: Equatable {
         public var minY: Double, maxY: Double, minX: Double, maxX: Double
@@ -188,7 +194,9 @@ public struct MultiLineGraphView: View {
         self.showCursorInfo = true
         // Debug: Print all points at this xValue for verification
         let points = plotData.filter { $0.xValue == xValue }
-        print("[Cursor] Snapped to x: \(xValue), points: \(points)")
+#if DEBUG
+        Self.logger.debug("[Cursor] Snapped to x: \(xValue, privacy: .public), points: \(String(describing: points), privacy: .public)")
+#endif
     }
 
     private func clearCursor() {
