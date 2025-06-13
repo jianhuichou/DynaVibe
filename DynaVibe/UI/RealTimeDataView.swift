@@ -69,11 +69,15 @@ struct RealTimeDataView: View {
         }
         .navigationViewStyle(StackNavigationViewStyle())
         .onChange(of: currentDisplayMode) { _, newValue in
+            vm.updateAxisRanges(isFrequencyDomain: newValue == .frequency)
             if newValue == .frequency && !vm.isFFTReady && (vm.timeSeriesData[.x]?.count ?? 0) > 0 {
                 Task { await vm.computeFFT() }
             }
         }
-        .onAppear { Task { vm.startLiveAttitudeMonitoring() } }
+        .onAppear {
+            Task { vm.startLiveAttitudeMonitoring() }
+            vm.updateAxisRanges(isFrequencyDomain: currentDisplayMode == .frequency)
+        }
         .onDisappear { Task { vm.stopLiveAttitudeMonitoring() } }
     }
     
@@ -110,20 +114,8 @@ struct RealTimeDataView: View {
         }
     }
 
-    // --- Dynamic Tick Arrays ---
-    private var xTicks: [Double] {
-        if currentDisplayMode == .frequency {
-            let minX = currentGraphRanges.minX
-            let maxX = currentGraphRanges.maxX
-            let start = ceil(minX / 5.0) * 5.0
-            return stride(from: start, through: maxX, by: 5.0).map { Double(round(3*$0)/3) }
-        } else {
-            let minX = currentGraphRanges.minX
-            let maxX = currentGraphRanges.maxX
-            let start = ceil(minX / 0.5) * 0.5
-            return stride(from: start, through: maxX, by: 0.5).map { Double(round(2*$0)/2) }
-        }
-    }
+    // --- Tick Arrays provided by the view model ---
+    private var xTicks: [Double] { vm.xAxisTicks }
     private var xGridLines: [Double] {
         if currentDisplayMode == .frequency {
             let minX = currentGraphRanges.minX
@@ -137,28 +129,7 @@ struct RealTimeDataView: View {
             return stride(from: start, through: maxX, by: 0.2).map { Double(round(5*$0)/5) }
         }
     }
-    private var yTicks: [Double] {
-        let minY = currentGraphRanges.minY
-        let maxY = currentGraphRanges.maxY
-        let span = maxY - minY
-        // Choose step size based on span
-        let step: Double
-        if span < 1 {
-            step = 0.1
-        } else if span < 5 {
-            step = 0.2
-        } else if span < 10 {
-            step = 0.5
-        } else if span < 50 {
-            step = 1.0
-        } else if span < 100 {
-            step = 5.0
-        } else {
-            step = pow(10, floor(log10(span)) - 1)
-        }
-        let start = ceil(minY / step) * step
-        return stride(from: start, through: maxY, by: step).map { Double(round(6*$0)/6) }
-    }
+    private var yTicks: [Double] { vm.yAxisTicks }
     private var yGridLines: [Double] {
         // Same as yTicks per user request
         return yTicks
