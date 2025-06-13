@@ -21,6 +21,7 @@ final class AccelerationViewModel: ObservableObject {
     @Published var rmsZ: Double? = nil
 
     @Published var isFFTReady = false
+    @Published var isComputingFFT = false
     @Published var timeLeft: Double = 0.0
     @Published var elapsedTime: Double = 0.0
     
@@ -175,9 +176,11 @@ final class AccelerationViewModel: ObservableObject {
     func computeFFT() async {
         guard collectedSamplesCount > 1, let rateForFFT = calculatedActualAverageSamplingRateForFFT else {
             isFFTReady = false
+            isComputingFFT = false
             return
         }
-        
+
+        isComputingFFT = true
         isFFTReady = false
         let xValues = (timeSeriesData[.x] ?? []).map { $0.value }
         let yValues = (timeSeriesData[.y] ?? []).map { $0.value }
@@ -195,6 +198,7 @@ final class AccelerationViewModel: ObservableObject {
         fftMagnitudes[.z] = zMag
         fftFrequencies = freqs
         isFFTReady = true
+        isComputingFFT = false
     }
     
     func exportCSV() {
@@ -287,7 +291,7 @@ final class AccelerationViewModel: ObservableObject {
 
     private func resetDataForNewRecording() {
         timeSeriesData = [.x: [], .y: [], .z: []]; fftMagnitudes = [:]; fftFrequencies = []
-        isFFTReady = false; rmsX = nil; rmsY = nil; rmsZ = nil
+        isFFTReady = false; isComputingFFT = false; rmsX = nil; rmsY = nil; rmsZ = nil
         latestX = 0; latestY = 0; latestZ = 0; currentRoll = 0; currentPitch = 0
         calculatedActualAverageSamplingRateForFFT = nil
         recorder.clear()

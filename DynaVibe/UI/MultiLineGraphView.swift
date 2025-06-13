@@ -17,12 +17,36 @@ public struct MultiLineGraphView: View {
     let yTicks: [Double] // Y axis tick values
     let xGridLines: [Double]? // X axis grid line values (optional)
     let yGridLines: [Double]? // Y axis grid line values (optional)
-    
+
     @State private var selectedX: Double? = nil
     @State private var showCursorInfo: Bool = false
-    @State private var isLoading: Bool = false
+    @Binding var isLoading: Bool
     @State private var chartXRange: ClosedRange<Double>? = nil // For zoom/pan
     @GestureState private var dragOffset: CGSize = .zero
+
+    public init(
+        plotData: [IdentifiableGraphPoint],
+        ranges: AxisRanges,
+        isFrequencyDomain: Bool,
+        axisColors: [Axis: Color],
+        yAxisLabelUnit: String,
+        xTicks: [Double],
+        yTicks: [Double],
+        xGridLines: [Double]?,
+        yGridLines: [Double]?,
+        isLoading: Binding<Bool>
+    ) {
+        self.plotData = plotData
+        self.ranges = ranges
+        self.isFrequencyDomain = isFrequencyDomain
+        self.axisColors = axisColors
+        self.yAxisLabelUnit = yAxisLabelUnit
+        self.xTicks = xTicks
+        self.yTicks = yTicks
+        self.xGridLines = xGridLines
+        self.yGridLines = yGridLines
+        self._isLoading = isLoading
+    }
 
     public var body: some View {
         VStack(spacing: 8) {
@@ -243,7 +267,8 @@ private struct MultiLineGraphView_PreviewHelper {
         xTicks: Array(stride(from: 0, through: 2, by: 0.5)), // Example ticks
         yTicks: Array(stride(from: -1.5, through: 1.5, by: 0.5)), // Example ticks
         xGridLines: nil,
-        yGridLines: nil
+        yGridLines: nil,
+        isLoading: .constant(false)
     )
     .padding()
     .frame(height: 250)
