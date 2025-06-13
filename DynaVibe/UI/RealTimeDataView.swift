@@ -5,8 +5,10 @@ import SwiftUI
 // This view now correctly uses the single, authoritative definition from MultiLineGraphView.swift.
 
 struct RealTimeDataView: View {
+    @Binding var project: Project
     @StateObject private var vm = AccelerationViewModel()
     @State private var currentDisplayMode: GraphDisplayMode = .time
+    @State private var hasSavedMeasurement = false
 
     enum GraphDisplayMode: String, CaseIterable, Identifiable {
         case time = "Time Series"
@@ -75,6 +77,16 @@ struct RealTimeDataView: View {
         }
         .onAppear { Task { vm.startLiveAttitudeMonitoring() } }
         .onDisappear { Task { vm.stopLiveAttitudeMonitoring() } }
+        .onChange(of: vm.isFFTReady) { _, newValue in
+            if newValue && vm.measurementState == .completed {
+                saveMeasurementIfNeeded()
+            }
+        }
+        .onChange(of: vm.measurementState) { _, newState in
+            if newState == .recording || newState == .preRecordingCountdown || newState == .idle {
+                hasSavedMeasurement = false
+            }
+        }
     }
     
     private var currentGraphRanges: MultiLineGraphView.AxisRanges {
@@ -162,6 +174,35 @@ struct RealTimeDataView: View {
     private var yGridLines: [Double] {
         // Same as yTicks per user request
         return yTicks
+    }
+
+    private func saveMeasurementIfNeeded() {
+        guard !hasSavedMeasurement,
+              vm.measurementState == .completed,
+              (vm.timeSeriesData[.x]?.isEmpty == false) else { return }
+
+        let measurement = Measurement(
+            date: Date(),
+            timeSeriesData: vm.timeSeriesData,
+            fftFrequencies: vm.fftFrequencies,
+            fftMagnitudes: vm.fftMagnitudes,
+            rmsX: vm.rmsX,
+            rmsY: vm.rmsY,
+            rmsZ: vm.rmsZ,
+            minX: vm.displayMinX,
+            maxX: vm.displayMaxX,
+            minY: vm.displayMinY,
+            maxY: vm.displayMaxY,
+            minZ: vm.displayMinZ,
+            maxZ: vm.displayMaxZ,
+            peakFrequencyX: vm.peakFrequencyX,
+            peakFrequencyY: vm.peakFrequencyY,
+            peakFrequencyZ: vm.peakFrequencyZ
+        )
+
+        project.measurements.append(measurement)
+        hasSavedMeasurement = true
+        Task { await vm.resetMeasurement() }
     }
 }
 
@@ -290,6 +331,6 @@ struct ControlButtonModifier: ViewModifier {
 
 struct RealTimeDataView_Previews: PreviewProvider {
     static var previews: some View {
-        RealTimeDataView()
+        RealTimeDataView(project: .constant(Project(name: "Preview", description: "")))
     }
 }

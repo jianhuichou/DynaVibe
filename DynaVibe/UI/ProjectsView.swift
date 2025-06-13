@@ -44,8 +44,9 @@ struct ProjectsView: View {
 // Placeholder model and new project form
 struct Project: Identifiable {
     let id = UUID()
-    let name: String
-    let description: String
+    var name: String
+    var description: String
+    var measurements: [Measurement] = []
 }
 
 struct NewProjectView: View {
