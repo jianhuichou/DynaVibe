@@ -3,6 +3,7 @@ import SwiftUI
 struct ProjectsView: View {
     @State private var projects: [Project] = [] // Placeholder model
     @State private var showingNewProject = false
+    @State private var exportURL: URL? = nil
     
     var body: some View {
         NavigationView {
@@ -19,6 +20,20 @@ struct ProjectsView: View {
                             Text(project.description)
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
+                        }
+                        .contextMenu {
+                            Button("Export Report") {
+                                Haptics.tap()
+                                exportReport(for: project)
+                            }
+                            Button("Export Raw Data") {
+                                Haptics.tap()
+                                exportCSV(for: project)
+                            }
+                            Button("Export FFT") {
+                                Haptics.tap()
+                                exportFFT(for: project)
+                            }
                         }
                     }
                 }
@@ -37,6 +52,33 @@ struct ProjectsView: View {
                     showingNewProject = false
                 })
             }
+            .sheet(item: $exportURL) { url in
+                ActivityView(url: url)
+            }
+        }
+    }
+
+    // MARK: - Export helpers
+    private func exportReport(for project: Project) {
+        let metrics = [ReportMetric(title: "Sample Metric", value: "0.0")]
+        let image = UIImage(systemName: "chart.bar") ?? UIImage()
+        if let url = ReportGenerator.generatePDF(title: project.name, metrics: metrics, chart: image) {
+            exportURL = url
+        }
+    }
+
+    private func exportCSV(for project: Project) {
+        let sample: [(timestamp: TimeInterval, x: Double, y: Double, z: Double)] = []
+        if let url = CSVExporter.exportAccelerationData(sample) {
+            exportURL = url
+        }
+    }
+
+    private func exportFFT(for project: Project) {
+        let freqs: [Double] = []
+        let mags: [Double] = []
+        if let url = CSVExporter.exportFFTData(frequencies: freqs, magnitudes: mags) {
+            exportURL = url
         }
     }
 }
@@ -73,4 +115,9 @@ struct NewProjectView: View {
             }
         }
     }
+}
+
+// Allow using URL with .sheet(item:)
+extension URL: Identifiable {
+    public var id: String { absoluteString }
 }
