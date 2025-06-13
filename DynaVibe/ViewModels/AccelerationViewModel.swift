@@ -413,4 +413,24 @@ final class AccelerationViewModel: ObservableObject {
             // Optionally: store ticks for use in the graph view
         }
     }
+
+    // MARK: - Persistence
+    func saveCurrentMeasurement(to project: Project, using context: ModelContext) {
+        let measurement = Measurement(
+            timestamp: Date(),
+            rawX: timeSeriesData[.x]?.map { $0.value } ?? [],
+            rawY: timeSeriesData[.y]?.map { $0.value } ?? [],
+            rawZ: timeSeriesData[.z]?.map { $0.value } ?? [],
+            fftFrequencies: fftFrequencies,
+            fftX: fftMagnitudes[.x] ?? [],
+            fftY: fftMagnitudes[.y] ?? [],
+            fftZ: fftMagnitudes[.z] ?? [],
+            rmsX: rmsX,
+            rmsY: rmsY,
+            rmsZ: rmsZ,
+            project: project
+        )
+        project.measurements.append(measurement)
+        context.insert(measurement)
+    }
 }

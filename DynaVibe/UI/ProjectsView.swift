@@ -1,9 +1,11 @@
 import SwiftUI
+import SwiftData
 
 struct ProjectsView: View {
-    @State private var projects: [Project] = [] // Placeholder model
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Project.name) private var projects: [Project]
     @State private var showingNewProject = false
-    
+
     var body: some View {
         NavigationView {
             VStack {
@@ -12,14 +14,17 @@ struct ProjectsView: View {
                         .foregroundColor(.secondary)
                         .padding()
                 } else {
-                    List(projects) { project in
-                        VStack(alignment: .leading) {
-                            Text(project.name)
-                                .font(.headline)
-                            Text(project.description)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
+                    List {
+                        ForEach(projects) { project in
+                            VStack(alignment: .leading) {
+                                Text(project.name)
+                                    .font(.headline)
+                                Text(project.description)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
                         }
+                        .onDelete(perform: deleteProjects)
                     }
                 }
             }
@@ -32,42 +37,40 @@ struct ProjectsView: View {
                 }
             }
             .sheet(isPresented: $showingNewProject) {
-                NewProjectView(onSave: { newProject in
-                    projects.append(newProject)
-                    showingNewProject = false
-                })
+                NewProjectView()
             }
         }
     }
-}
 
-// Placeholder model and new project form
-struct Project: Identifiable {
-    let id = UUID()
-    let name: String
-    let description: String
+    private func deleteProjects(at offsets: IndexSet) {
+        for index in offsets { modelContext.delete(projects[index]) }
+    }
 }
 
 struct NewProjectView: View {
-    var onSave: (Project) -> Void
-    @Environment(\.presentationMode) var presentationMode
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var description = ""
+    @State private var type = ""
     var body: some View {
         NavigationView {
             Form {
                 TextField("Project Name", text: $name)
+                TextField("Type", text: $type)
                 TextField("Description", text: $description)
             }
             .navigationTitle("New Project")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { Haptics.tap(); presentationMode.wrappedValue.dismiss() }
+                    Button("Cancel") { Haptics.tap(); dismiss() }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         Haptics.tap()
-                        onSave(Project(name: name, description: description))
+                        let project = Project(name: name, description: description, type: type)
+                        modelContext.insert(project)
+                        dismiss()
                     }.disabled(name.isEmpty)
                 }
             }
