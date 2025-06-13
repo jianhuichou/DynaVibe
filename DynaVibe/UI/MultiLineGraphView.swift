@@ -44,12 +44,12 @@ public struct MultiLineGraphView: View {
                             .foregroundStyle(Color.gray.opacity(0.5))
                     }
                     // Use provided xGridLines/yGridLines for grid lines if available, else fall back to xTicks/yTicks
-                    ForEach(xGridLines ?? xTicks, id: \ .self) { x in
+                    ForEach(xGridLines ?? xTicks, id: \.self) { x in
                         RuleMark(x: .value("GridX", x))
                             .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
                             .foregroundStyle(Color.gray.opacity(0.3))
                     }
-                    ForEach(yGridLines ?? yTicks, id: \ .self) { y in
+                    ForEach(yGridLines ?? yTicks, id: \.self) { y in
                         RuleMark(y: .value("GridY", y))
                             .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
                             .foregroundStyle(Color.gray.opacity(0.3))
