@@ -2,9 +2,10 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selectedTab = 0
+    @State private var activeProject = Project(name: "Default Project", description: "")
     var body: some View {
         TabView(selection: $selectedTab) {
-            RealTimeDataView()
+            RealTimeDataView(project: $activeProject)
                 .tabItem {
                     Image(systemName: "waveform.path.ecg")
                     Text("Real-Time Data")
