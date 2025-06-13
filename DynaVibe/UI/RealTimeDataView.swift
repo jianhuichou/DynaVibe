@@ -37,7 +37,8 @@ struct RealTimeDataView: View {
                     xTicks: xTicks,
                     yTicks: yTicks,
                     xGridLines: xGridLines,
-                    yGridLines: yGridLines
+                    yGridLines: yGridLines,
+                    isLoading: $vm.isComputingFFT
                 )
                 .frame(minHeight: 200, idealHeight: 250, maxHeight: .infinity)
                 .background(Color(UIColor.systemGray6))
