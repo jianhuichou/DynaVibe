@@ -269,7 +269,7 @@ final class AccelerationViewModel: ObservableObject {
         for sample in allRecordedData {
             newX.append(DataPoint(timestamp: sample.timestamp, value: sample.x))
             newY.append(DataPoint(timestamp: sample.timestamp, value: sample.y))
-            // [FIX] Corrected typo from `aple.z` to `sample.z`
+            // [FIX] Previously used "aple.z"; corrected to "sample.z".
             newZ.append(DataPoint(timestamp: sample.timestamp, value: sample.z))
         }
 
