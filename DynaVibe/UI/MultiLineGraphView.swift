@@ -20,9 +20,7 @@ public struct MultiLineGraphView: View {
     
     @State private var selectedX: Double? = nil
     @State private var showCursorInfo: Bool = false
-    @State private var isLoading: Bool = false
     @State private var chartXRange: ClosedRange<Double>? = nil // For zoom/pan
-    @GestureState private var dragOffset: CGSize = .zero
 
     public var body: some View {
         VStack(spacing: 8) {
@@ -77,11 +75,6 @@ public struct MultiLineGraphView: View {
                     setDefaultCursorPosition(for: newData)
                 }
                 .gesture(zoomAndPanGesture())
-                if isLoading {
-                    ProgressView().scaleEffect(1.5)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color.white.opacity(0.5))
-                }
             }
         }
     }
