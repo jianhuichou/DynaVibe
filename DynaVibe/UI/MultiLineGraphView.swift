@@ -54,30 +54,6 @@ public struct MultiLineGraphView: View {
         self._isLoading = isLoading
     }
 
-    public init(
-        plotData: [IdentifiableGraphPoint],
-        ranges: AxisRanges,
-        isFrequencyDomain: Bool,
-        axisColors: [Axis: Color],
-        yAxisLabelUnit: String,
-        xTicks: [Double],
-        yTicks: [Double],
-        xGridLines: [Double]?,
-        yGridLines: [Double]?,
-        isLoading: Binding<Bool>
-    ) {
-        self.plotData = plotData
-        self.ranges = ranges
-        self.isFrequencyDomain = isFrequencyDomain
-        self.axisColors = axisColors
-        self.yAxisLabelUnit = yAxisLabelUnit
-        self.xTicks = xTicks
-        self.yTicks = yTicks
-        self.xGridLines = xGridLines
-        self.yGridLines = yGridLines
-        self._isLoading = isLoading
-    }
-
     public var body: some View {
         VStack(spacing: 8) {
             ZStack {
