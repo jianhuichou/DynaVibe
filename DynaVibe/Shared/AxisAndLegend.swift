@@ -1,4 +1,4 @@
-public enum Axis: String, CaseIterable, Identifiable {
+public enum Axis: String, CaseIterable, Identifiable, Codable {
     case x
     case y
     case z
