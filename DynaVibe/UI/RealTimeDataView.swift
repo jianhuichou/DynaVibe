@@ -303,6 +303,6 @@ struct ControlButtonModifier: ViewModifier {
 
 struct RealTimeDataView_Previews: PreviewProvider {
     static var previews: some View {
-        RealTimeDataView(project: .constant(Project(name: "Preview", description: "")))
+        RealTimeDataView(project: .constant(Project(name: "Preview", description: "", type: .timeHistory)))
     }
 }

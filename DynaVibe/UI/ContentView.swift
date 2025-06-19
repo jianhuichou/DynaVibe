@@ -2,19 +2,19 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selectedTab = 0
-    @State private var activeProject = Project(name: "Default Project", description: "")
+    @State private var activeProject = Project(name: "Default Project", description: "", type: .timeHistory)
     var body: some View {
         TabView(selection: $selectedTab) {
-            RealTimeDataView(project: $activeProject)
-                .tabItem {
-                    Image(systemName: "waveform.path.ecg")
-                    Text("Real-Time Data")
-                }
-                .tag(0)
             ProjectsView()
                 .tabItem {
                     Image(systemName: "folder")
                     Text("Projects")
+                }
+                .tag(0)
+            RealTimeDataView(project: $activeProject)
+                .tabItem {
+                    Image(systemName: "waveform.path.ecg")
+                    Text("Real-Time Data")
                 }
                 .tag(1)
             SettingsView()
@@ -32,9 +32,9 @@ struct ContentView: View {
         }
         .onChange(of: selectedTab) { oldValue, newValue in
             if newValue == 0 {
-                print("Switched to Real-Time Data")
-            } else if newValue == 1 {
                 print("Switched to Projects")
+            } else if newValue == 1 {
+                print("Switched to Real-Time Data")
             } else if newValue == 2 {
                 print("Switched to Settings")
             }
