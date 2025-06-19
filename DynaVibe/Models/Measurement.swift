@@ -1,4 +1,6 @@
-struct Measurement: Identifiable {
+import Foundation
+
+struct Measurement: Identifiable, Codable {
     let id = UUID()
     let date: Date
     let timeSeriesData: [Axis: [DataPoint]]
