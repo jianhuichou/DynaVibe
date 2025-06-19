@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ProjectsView: View {
-    @State private var projects: [Project] = [] // Placeholder model
+    @State private var projects: [Project] = []
     @State private var showingNewProject = false
     @State private var exportURL: URL? = nil
     
@@ -13,26 +13,30 @@ struct ProjectsView: View {
                         .foregroundColor(.secondary)
                         .padding()
                 } else {
-                    List(projects) { project in
-                        VStack(alignment: .leading) {
-                            Text(project.name)
-                                .font(.headline)
-                            Text(project.description)
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                        .contextMenu {
-                            Button("Export Report") {
-                                Haptics.tap()
-                                exportReport(for: project)
+                    List {
+                        ForEach($projects) { $project in
+                            NavigationLink(destination: AssessmentFlowView(project: $project)) {
+                                VStack(alignment: .leading) {
+                                    Text(project.name)
+                                        .font(.headline)
+                                    Text(project.type.rawValue)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                             }
-                            Button("Export Raw Data") {
-                                Haptics.tap()
-                                exportCSV(for: project)
-                            }
-                            Button("Export FFT") {
-                                Haptics.tap()
-                                exportFFT(for: project)
+                            .contextMenu {
+                                Button("Export Report") {
+                                    Haptics.tap()
+                                    exportReport(for: project)
+                                }
+                                Button("Export Raw Data") {
+                                    Haptics.tap()
+                                    exportCSV(for: project)
+                                }
+                                Button("Export FFT") {
+                                    Haptics.tap()
+                                    exportFFT(for: project)
+                                }
                             }
                         }
                     }
@@ -83,24 +87,33 @@ struct ProjectsView: View {
     }
 }
 
-// Placeholder model and new project form
-struct Project: Identifiable {
-    let id = UUID()
-    var name: String
-    var description: String
-    var measurements: [Measurement] = []
-}
-
 struct NewProjectView: View {
     var onSave: (Project) -> Void
     @Environment(\.presentationMode) var presentationMode
     @State private var name = ""
     @State private var description = ""
+    @State private var type: ProjectType = .timeHistory
+    @State private var buildingType: BuildingType = .office
+    @State private var construction: ConstructionMaterial = .concrete
     var body: some View {
         NavigationView {
             Form {
                 TextField("Project Name", text: $name)
                 TextField("Description", text: $description)
+                Picker("Project Type", selection: $type) {
+                    ForEach(ProjectType.allCases) { Text($0.rawValue).tag($0) }
+                }
+                if type == .floorVibration {
+                    Picker("Building Type", selection: $buildingType) {
+                        ForEach(BuildingType.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    Picker("Construction Material", selection: $construction) {
+                        ForEach(ConstructionMaterial.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    Section(header: Text("Subjective Assessment")) {
+                        Text("Survey coming soon")
+                    }
+                }
             }
             .navigationTitle("New Project")
             .toolbar {
@@ -110,7 +123,12 @@ struct NewProjectView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         Haptics.tap()
-                        onSave(Project(name: name, description: description))
+                        var project = Project(name: name, description: description, type: type)
+                        if type == .floorVibration {
+                            project.buildingType = buildingType
+                            project.constructionMaterial = construction
+                        }
+                        onSave(project)
                     }.disabled(name.isEmpty)
                 }
             }

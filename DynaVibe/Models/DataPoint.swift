@@ -1,7 +1,7 @@
 // In Models/DataPoint.swift
 import Foundation
 
-public struct DataPoint: Equatable, Identifiable {
+public struct DataPoint: Equatable, Identifiable, Codable {
     public let id: UUID // 'id' is a let constant
     public let timestamp: Double
     public let value: Double
